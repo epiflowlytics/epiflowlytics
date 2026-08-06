@@ -38,9 +38,42 @@ function PulseLine() {
   )
 }
 
+// Ikon mata terbuka (password terlihat)
+function EyeIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path
+        d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  )
+}
+
+// Ikon mata dicoret (password disembunyikan)
+function EyeOffIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path
+        d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a20.6 20.6 0 0 1 5.06-5.94M9.9 4.24A10.4 10.4 0 0 1 12 4c7 0 11 7 11 7a20.6 20.6 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M1 1l22 22" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const { signIn } = useAuth()
@@ -165,23 +198,49 @@ export default function Login() {
 
             <label className="flex flex-col gap-1.5">
               <span className="text-sm font-medium">Kata sandi</span>
-              <input
-                type="password"
-                required
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="px-3.5 py-3 sm:py-2.5 rounded-lg outline-none transition-shadow w-full"
-                style={{
-                  border: '1px solid var(--line)',
-                  background: '#fff',
-                  color: 'var(--ink)',
-                  fontSize: '16px',
-                }}
-                onFocus={(e) => (e.target.style.boxShadow = '0 0 0 3px var(--accent-soft)')}
-                onBlur={(e) => (e.target.style.boxShadow = 'none')}
-              />
+              <div style={{ position: 'relative' }}>
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="px-3.5 py-3 sm:py-2.5 rounded-lg outline-none transition-shadow w-full"
+                  style={{
+                    border: '1px solid var(--line)',
+                    background: '#fff',
+                    color: 'var(--ink)',
+                    fontSize: '16px',
+                    paddingRight: '2.75rem',
+                  }}
+                  onFocus={(e) => (e.target.style.boxShadow = '0 0 0 3px var(--accent-soft)')}
+                  onBlur={(e) => (e.target.style.boxShadow = 'none')}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  aria-label={showPassword ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}
+                  tabIndex={-1}
+                  className="touch-manipulation"
+                  style={{
+                    position: 'absolute',
+                    right: '0.75rem',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    background: 'none',
+                    border: 'none',
+                    padding: '0.25rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--muted)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  {showPassword ? <EyeOffIcon /> : <EyeIcon />}
+                </button>
+              </div>
             </label>
 
             {error && (

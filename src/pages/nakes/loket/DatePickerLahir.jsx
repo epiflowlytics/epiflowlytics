@@ -99,7 +99,17 @@ export default function DatePickerLahir({ name, value, onChange, className }) {
       </button>
 
       {buka && (
-        <div className="absolute z-50 mt-1 w-72 bg-white border border-gray-200 rounded-xl shadow-lg p-3">
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4"
+          onClick={() => {
+            setBuka(false)
+            setMode('tanggal')
+          }}
+        >
+          <div
+            className="w-72 bg-white border border-gray-200 rounded-xl shadow-lg p-3"
+            onClick={(e) => e.stopPropagation()}
+          >
           {/* Header navigasi */}
           <div className="flex items-center justify-between mb-2">
             <button
@@ -246,6 +256,7 @@ export default function DatePickerLahir({ name, value, onChange, className }) {
               ))}
             </div>
           )}
+          </div>
         </div>
       )}
     </div>
