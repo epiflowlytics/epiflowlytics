@@ -1,7 +1,14 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { supabase, supabaseNotConfigured } from '../lib/supabaseClient'
+
+import epuskesmasLogo from '../assets/logos/epuskesmas.png'
+import pcareBpjsLogo from '../assets/logos/pcare-bpjs.png'
+import allrecordTc19Logo from '../assets/logos/allrecord-tc19.png'
+import asikLogo from '../assets/logos/asik.png'
+import smileLogo from '../assets/logos/smile.png'
+import skmLogo from '../assets/logos/skm.png'
 
 const ROLE_REDIRECT = {
   super_owner: '/dashboard/super-owner',
@@ -15,6 +22,118 @@ const PROFESI_REDIRECT = {
   DOKTER: '/dashboard/nakes/dokter',
   APOTEKER: '/dashboard/nakes/apotek',
 }
+
+// Daftar aplikasi lain yang ditautkan di bawah form login Epiflowlytics.
+// APPS[0] adalah aplikasi utama halaman ini (Epiflowlytics, diproses via Supabase).
+// Aplikasi setelahnya hanya berupa link keluar: klik logo -> buka halaman login
+// asli aplikasi tsb di tab baru, tanpa membawa data apa pun dari form ini.
+const APPS = [
+  {
+    id: 'epiflowlytics',
+    name: 'Epiflowlytics',
+  },
+  {
+    id: 'epuskesmas',
+    name: 'e-Puskesmas',
+    logo: epuskesmasLogo,
+    externalUrl: 'https://gowa.epuskesmas.id',
+  },
+  {
+    id: 'pcare-bpjs',
+    name: 'PCare BPJS',
+    logo: pcareBpjsLogo,
+    externalUrl: 'https://pcarejkn.bpjs-kesehatan.go.id/eclaim/Login',
+  },
+  {
+    id: 'sehat-indonesiaku',
+    name: 'ASIK',
+    logo: asikLogo,
+    externalUrl: 'https://sehatindonesiaku.kemkes.go.id/auth/login',
+  },
+  {
+    id: 'smile',
+    name: 'SMILE',
+    logo: smileLogo,
+    externalUrl: 'https://smile.kemkes.go.id/',
+  },
+  {
+    id: 'skm',
+    name: 'SKM',
+    logo: skmLogo,
+    externalUrl: 'https://skm.go.id/sign-in',
+  },
+  // --- aplikasi Kemenkes lain (logo Kemenkes bersama, diurutkan A-Z) ---
+  {
+    id: 'allrecord-tc19',
+    name: 'AllRecord',
+    logo: allrecordTc19Logo,
+    externalUrl: 'https://allrecord-tc19.kemkes.go.id',
+  },
+  {
+    id: 'aspak',
+    name: 'ASPAK',
+    logo: allrecordTc19Logo,
+    externalUrl: 'https://aspak.kemkes.go.id/',
+  },
+  {
+    id: 'siha',
+    name: 'SIHA',
+    logo: allrecordTc19Logo,
+    externalUrl: 'https://siha.kemkes.go.id',
+  },
+  {
+    id: 'sigizi-kesga',
+    name: 'SIGIZI',
+    logo: allrecordTc19Logo,
+    externalUrl: 'https://sigizikesga.kemkes.go.id/',
+  },
+  {
+    id: 'sihepi',
+    name: 'SIHEPI',
+    logo: allrecordTc19Logo,
+    externalUrl: 'https://sihepi.kemkes.go.id',
+  },
+  {
+    id: 'akun-yankes',
+    name: 'SIRS',
+    logo: allrecordTc19Logo,
+    externalUrl: 'https://akun-yankes.kemkes.go.id',
+  },
+  {
+    id: 'sismal',
+    name: 'SISMAL',
+    logo: allrecordTc19Logo,
+    externalUrl: 'https://sismal.kemkes.go.id',
+  },
+  {
+    id: 'sisrute',
+    name: 'SISRUTE',
+    logo: allrecordTc19Logo,
+    externalUrl: 'https://sisrute.kemkes.go.id',
+  },
+  {
+    id: 'sitb',
+    name: 'SITB',
+    logo: allrecordTc19Logo,
+    externalUrl: 'https://www.sitb.id',
+  },
+  {
+    id: 'skdr',
+    name: 'SKDR',
+    logo: allrecordTc19Logo,
+    externalUrl: 'https://skdr.surveilans.org/auth',
+  },
+  // Tambahkan aplikasi lain di sini dengan pola yang sama:
+  // 1. Taruh file logo di src/assets/logos/nama-app.png
+  // 2. import namaAppLogo from '../assets/logos/nama-app.png' di atas
+  // 3. Tambahkan entri berikut:
+  // {
+  //   id: 'app-lain',
+  //   name: 'Nama Aplikasi',
+  //   logo: namaAppLogo,
+  //   externalUrl: 'https://domain-aplikasi-lain.tld',
+  // },
+]
 
 function PulseLine() {
   return (
@@ -70,14 +189,30 @@ function EyeOffIcon() {
   )
 }
 
+// Ikon kaca pembesar (pencarian)
+function SearchIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M21 21l-4.35-4.35" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 export default function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [appSearch, setAppSearch] = useState('')
+  const appSearchInputRef = useRef(null)
   const { signIn } = useAuth()
   const navigate = useNavigate()
+
+  // Halaman ini hanya menampilkan form login Epiflowlytics.
+  // Aplikasi lain (mis. e-Puskesmas) langsung membuka domain aslinya saat logonya diklik.
+  const mainApp = APPS[0]
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -121,6 +256,12 @@ export default function Login() {
     navigate(tujuan)
   }
 
+  // Aplikasi lain (selain aplikasi utama), difilter berdasarkan pencarian nama
+  const otherApps = APPS.filter((app) => app.id !== mainApp.id)
+  const filteredApps = otherApps.filter((app) =>
+    app.name.toLowerCase().includes(appSearch.trim().toLowerCase())
+  )
+
   return (
     <div
       style={{
@@ -156,7 +297,7 @@ export default function Login() {
       )}
 
       <div style={{ width: '100%', maxWidth: '400px', boxSizing: 'border-box' }}>
-        {/* wordmark */}
+        {/* wordmark Epiflowlytics — selalu tampil, ini adalah login utama halaman ini */}
         <div className="flex flex-col items-center text-center mb-6 sm:mb-8">
           <PulseLine />
           <h1 className="text-[1.5rem] sm:text-[1.7rem] font-extrabold tracking-tight mt-3 leading-none">
@@ -261,6 +402,130 @@ export default function Login() {
               {loading ? 'Memproses…' : 'Masuk'}
             </button>
           </form>
+        </div>
+
+        {/* daftar aplikasi lain — klik logo langsung membuka halaman login asli aplikasi tsb */}
+        {otherApps.length > 0 && (
+          <div className="flex flex-col items-center mt-6 sm:mt-8">
+            <span className="text-xs font-medium mb-3" style={{ color: 'var(--muted)' }}>
+              Aplikasi lain
+            </span>
+
+            <div style={{ width: '100%', maxWidth: '280px', marginBottom: '1rem', position: 'relative' }}>
+              <input
+                ref={appSearchInputRef}
+                type="text"
+                value={appSearch}
+                onChange={(e) => setAppSearch(e.target.value)}
+                placeholder="Cari aplikasi…"
+                className="px-3.5 py-2.5 rounded-lg outline-none transition-shadow w-full"
+                style={{
+                  border: '1px solid var(--line)',
+                  background: '#fff',
+                  color: 'var(--ink)',
+                  fontSize: '14px',
+                  boxSizing: 'border-box',
+                  paddingRight: '2.5rem',
+                }}
+                onFocus={(e) => (e.target.style.boxShadow = '0 0 0 3px var(--accent-soft)')}
+                onBlur={(e) => (e.target.style.boxShadow = 'none')}
+              />
+              <button
+                type="button"
+                onClick={() => appSearchInputRef.current?.focus()}
+                aria-label="Cari aplikasi"
+                className="touch-manipulation"
+                style={{
+                  position: 'absolute',
+                  right: '0.65rem',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  background: 'none',
+                  border: 'none',
+                  padding: '0.15rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--muted)',
+                  cursor: 'pointer',
+                }}
+              >
+                <SearchIcon />
+              </button>
+            </div>
+
+            {filteredApps.length > 0 ? (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(84px, 1fr))',
+                  gap: '1rem 0.5rem',
+                  width: '100%',
+                  maxWidth: '360px',
+                }}
+              >
+                {filteredApps.map((app) => (
+                  <a
+                    key={app.id}
+                    href={app.externalUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex flex-col items-center gap-1.5 touch-manipulation"
+                    style={{ textDecoration: 'none', padding: '0.25rem' }}
+                  >
+                    <span
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: '100%',
+                        height: '40px',
+                        padding: '0 0.5rem',
+                        borderRadius: '8px',
+                        border: '1px solid var(--line)',
+                        background: '#fff',
+                        boxSizing: 'border-box',
+                      }}
+                    >
+                      <img
+                        src={app.logo}
+                        alt={app.name}
+                        style={{ maxHeight: '22px', maxWidth: '100%', width: 'auto', objectFit: 'contain' }}
+                      />
+                    </span>
+                    <span
+                      className="text-xs text-center"
+                      style={{
+                        color: 'var(--muted)',
+                        fontWeight: 500,
+                        lineHeight: 1.2,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {app.name}
+                    </span>
+                  </a>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs" style={{ color: 'var(--muted)' }}>
+                Tidak ada aplikasi yang cocok.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* footer copyright */}
+        <div className="flex items-center justify-center mt-8 sm:mt-10">
+          <span
+            className="text-xs tracking-wide"
+            style={{ color: 'var(--muted)' }}
+          >
+            &copy; 2026 Matandre Indonesia. All rights reserved.
+          </span>
         </div>
       </div>
     </div>

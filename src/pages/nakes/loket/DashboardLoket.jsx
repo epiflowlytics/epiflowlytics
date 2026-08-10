@@ -107,6 +107,7 @@ const FORM_AWAL = {
   rak_id: '', // Rak Rekam Medis — lokasi fisik penyimpanan berkas RM
   wilayah: '',
   poli_id: '',
+  petugas_poli_id: '', // dokter/PJ ruangan yang bertugas di poli tujuan, dipilih saat pendaftaran
   status_prioritas: '', // FITUR 8
   pasien_id_existing: null, // dipakai saat memilih pasien lama
 }
@@ -114,6 +115,7 @@ const FORM_AWAL = {
 const FORM_PASIEN_RAK_AWAL = {
   no_rekam_medis: '',
   mode_rm: 'otomatis',
+  rm_terkunci: false, // true = No. RM dikunci karena "Tambah Anggota" ke grup RM yang sudah ada
   urutan_kk: '',
   no_kk: '',
   status_keluarga: '',
@@ -169,7 +171,7 @@ const OPSI_PRIORITAS = [
 //   - modal "Lihat Format"    -> dirender di dalam <iframe srcDoc=...> di layar
 // Dengan begini, "Cetak" dan "Lihat" dijamin menampilkan HTML yang sama
 // persis, hanya beda wadah (tab baru vs iframe dalam modal).
-function buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat) {
+function buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat, berkasList) {
   const namaInstansi = instansi?.nama || '-'
   const namaPemerintah = instansi?.nama_pemerintah || ''
   const namaDinas = instansi?.nama_dinas || ''
@@ -195,6 +197,24 @@ function buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat) {
   const alamatPasien = dataPasien?.alamat || '-'
   const noKtpBpjs = [dataPasien?.no_nik, dataPasien?.no_bpjs].filter(Boolean).join(' / ') || '-'
   const nomorUrutKk = dataPasien?.urutan_kk != null && dataPasien?.urutan_kk !== '' ? String(dataPasien.urutan_kk) : ''
+
+  const daftarBerkas = berkasList || []
+  const htmlBerkas = daftarBerkas.length > 0
+    ? daftarBerkas.map((b) => {
+        if (b.tipe_file === 'foto') {
+          return `
+            <div class="halaman-berkas">
+              <p class="judul-berkas">Berkas RM Fisik — ${b.nama_file}</p>
+              <img src="${b.url}" alt="${b.nama_file}" class="foto-berkas" />
+            </div>`
+        }
+        return `
+          <div class="halaman-berkas">
+            <p class="judul-berkas">Berkas RM Fisik — ${b.nama_file}</p>
+            <iframe src="${b.url}" class="pdf-berkas"></iframe>
+          </div>`
+      }).join('')
+    : ''
 
   const baris = (riwayat && riwayat.length > 0 ? riwayat : [{}])
     .map((r) => {
@@ -240,6 +260,13 @@ function buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat) {
           .identitas td.label { width: 150px; white-space: nowrap; }
           .identitas td.titik { width: 12px; }
           .identitas td.isi { border-bottom: 1px dotted #555; }
+          .halaman-berkas { page-break-before: always; padding-top: 10px; }
+          .halaman-berkas .judul-berkas { font-size: 12px; font-weight: bold; margin-bottom: 8px; text-align: center; }
+          .halaman-berkas .foto-berkas { display: block; width: 100%; max-width: 100%; height: auto; }
+          .halaman-berkas .pdf-berkas { display: block; width: 100%; height: 950px; border: 1px solid #999; }
+          @media print {
+            .halaman-berkas { page-break-before: always; }
+          }
           table.riwayat { width: 100%; border-collapse: collapse; font-size: 11px; }
           table.riwayat th, table.riwayat td { border: 1px solid #000; padding: 4px 6px; vertical-align: top; }
           table.riwayat th { background: #f0f0f0; text-align: center; font-weight: bold; }
@@ -321,6 +348,8 @@ function buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat) {
           </tbody>
         </table>
 
+        ${htmlBerkas}
+
         <div class="no-print">
           <button onclick="window.print()">🖨️ Cetak</button>
         </div>
@@ -332,24 +361,184 @@ function buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat) {
 // Buka Kartu Rekam Medis di tab baru siap-print (tombol "🖨️ Cetak Kartu RM
 // (F4)"). Memakai HTML yang sama persis dengan modal "Lihat Format" karena
 // keduanya bersumber dari buatHtmlKartuRekamMedis().
-function cetakKartuRekamMedis(dataPasien, instansi, riwayat) {
+function cetakKartuRekamMedis(dataPasien, instansi, riwayat, berkasList) {
   const w = window.open('', '_blank', 'width=900,height=1000')
   if (!w) return
-  w.document.write(buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat))
+  w.document.write(buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat, berkasList))
   w.document.close()
 }
 
-function TabelRiwayatPemeriksaan({ riwayat, loading, dataPasien, instansi }) {
+function TabelRiwayatPemeriksaan({ riwayat, loading, dataPasien, instansi, profile }) {
   // Panel "Lihat riwayat pemeriksaan" terbuka/tertutup DI DALAM kolom/card
   // ini juga (bukan modal/popup terpisah), supaya petugas tetap bisa lihat
   // riwayat sambil mengisi form pemeriksaan di sebelahnya. Isinya kartu
   // rekam medis PENUH, sama persis dengan hasil Cetak (F4).
   const [panelLihatTerbuka, setPanelLihatTerbuka] = useState(false)
 
+  // Berkas RM fisik (foto/scan/PDF) yang diupload untuk pasien ini.
+  const [berkasList, setBerkasList] = useState([])
+  const [berkasLoading, setBerkasLoading] = useState(false)
+  const [uploadingBerkas, setUploadingBerkas] = useState(false)
+  const [errorBerkas, setErrorBerkas] = useState('')
+  const inputFotoRef = useRef(null)
+  const inputPdfRef = useRef(null)
+
+  const pasienId = dataPasien?.id
+
+  async function muatBerkasRm(idPasien) {
+    if (!idPasien) { setBerkasList([]); return }
+    setBerkasLoading(true)
+    const { data, error } = await supabase
+      .from('berkas_rm')
+      .select('id, nama_file, tipe_file, path_storage, dibuat_pada')
+      .eq('pasien_id', idPasien)
+      .order('dibuat_pada', { ascending: false })
+    if (error) {
+      setBerkasLoading(false)
+      return
+    }
+    // Buat signed URL (bucket privat) untuk tiap berkas supaya bisa ditampilkan/diunduh.
+    const denganUrl = await Promise.all(
+      (data || []).map(async (b) => {
+        const { data: signed } = await supabase
+          .storage
+          .from('berkas-rm')
+          .createSignedUrl(b.path_storage, 60 * 60) // berlaku 1 jam
+        return { ...b, url: signed?.signedUrl || null }
+      })
+    )
+    setBerkasList(denganUrl)
+    setBerkasLoading(false)
+  }
+
+  useEffect(() => {
+    muatBerkasRm(pasienId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pasienId])
+
+  async function handleUploadBerkas(fileList, tipe) {
+    if (!fileList || fileList.length === 0 || !pasienId || !instansi?.id) return
+    setErrorBerkas('')
+    setUploadingBerkas(true)
+    try {
+      for (const file of Array.from(fileList)) {
+        const ekstensi = file.name.split('.').pop()
+        const namaAcak = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ekstensi}`
+        const path = `${instansi.id}/${pasienId}/${namaAcak}`
+
+        const { error: uploadError } = await supabase
+          .storage
+          .from('berkas-rm')
+          .upload(path, file, { contentType: file.type, upsert: false })
+        if (uploadError) throw uploadError
+
+        const { error: insertError } = await supabase
+          .from('berkas_rm')
+          .insert({
+            pasien_id: pasienId,
+            instansi_id: instansi.id,
+            nama_file: file.name,
+            tipe_file: tipe,
+            path_storage: path,
+            ukuran_bytes: file.size,
+            diupload_oleh: profile?.id || null,
+          })
+        if (insertError) throw insertError
+      }
+      await muatBerkasRm(pasienId)
+      setPanelLihatTerbuka(true)
+    } catch (err) {
+      setErrorBerkas(err?.message || 'Gagal upload berkas. Coba lagi.')
+    } finally {
+      setUploadingBerkas(false)
+      if (inputFotoRef.current) inputFotoRef.current.value = ''
+      if (inputPdfRef.current) inputPdfRef.current.value = ''
+    }
+  }
+
+  async function handleHapusBerkas(berkas) {
+    if (!window.confirm(`Hapus berkas "${berkas.nama_file}"? Tindakan ini tidak bisa dibatalkan.`)) return
+    setErrorBerkas('')
+    const { error: storageError } = await supabase.storage.from('berkas-rm').remove([berkas.path_storage])
+    if (storageError) { setErrorBerkas(storageError.message); return }
+    const { error: dbError } = await supabase.from('berkas_rm').delete().eq('id', berkas.id)
+    if (dbError) { setErrorBerkas(dbError.message); return }
+    setBerkasList((prev) => prev.filter((b) => b.id !== berkas.id))
+  }
+
   return (
     <div className="mb-4 bg-white border rounded-2xl p-4">
       <div className="flex items-center justify-between mb-2">
         <p className="text-xs font-semibold text-gray-500">Riwayat Pemeriksaan Sebelumnya</p>
+      </div>
+
+      {/* Tombol upload berkas RM fisik — hasil foto/scan kertas RM asli.
+          Galerinya SENGAJA tidak ditampilkan di sini; berkas akan tampil
+          menyatu di dalam Kartu Rekam Medis (area merge di bawah identitas),
+          sama persis baik di pratinjau "Lihat" maupun hasil Cetak (F4). */}
+      <div className="mb-3 flex items-center justify-between gap-2 flex-wrap border rounded-xl p-3 bg-gray-50">
+        <p className="text-[11px] font-semibold text-gray-500">📁 Berkas RM Fisik (Foto/Scan)</p>
+        <div className="flex gap-1.5 items-center">
+          <input
+            ref={inputFotoRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            multiple
+            className="hidden"
+            onChange={(e) => handleUploadBerkas(e.target.files, 'foto')}
+          />
+          <input
+            ref={inputPdfRef}
+            type="file"
+            accept="application/pdf"
+            multiple
+            className="hidden"
+            onChange={(e) => handleUploadBerkas(e.target.files, 'pdf')}
+          />
+          <button
+            type="button"
+            disabled={!pasienId || uploadingBerkas}
+            onClick={() => inputFotoRef.current?.click()}
+            className="px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-[11px] font-semibold disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+          >
+            📷 Foto
+          </button>
+          <button
+            type="button"
+            disabled={!pasienId || uploadingBerkas}
+            onClick={() => inputPdfRef.current?.click()}
+            className="px-2.5 py-1 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-700 text-[11px] font-semibold disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+          >
+            📄 PDF
+          </button>
+        </div>
+        {uploadingBerkas && (
+          <p className="text-[11px] text-blue-600 w-full">Mengunggah berkas...</p>
+        )}
+        {errorBerkas && (
+          <p className="text-[11px] text-red-600 w-full">{errorBerkas}</p>
+        )}
+        {!pasienId && (
+          <p className="text-[11px] text-gray-400 w-full">Simpan/pilih data pasien dulu sebelum upload berkas.</p>
+        )}
+        {pasienId && berkasList.length > 0 && (
+          <div className="w-full flex flex-wrap gap-1.5">
+            {berkasList.map((b) => (
+              <span key={b.id} className="inline-flex items-center gap-1 text-[10px] bg-white border rounded-full pl-2 pr-1 py-0.5">
+                {b.tipe_file === 'foto' ? '📷' : '📄'} {b.nama_file.length > 16 ? b.nama_file.slice(0, 16) + '…' : b.nama_file}
+                <button
+                  type="button"
+                  onClick={() => handleHapusBerkas(b)}
+                  title="Hapus berkas"
+                  className="w-3.5 h-3.5 rounded-full text-red-500 hover:bg-red-50 leading-none"
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {loading && (
@@ -458,14 +647,14 @@ function TabelRiwayatPemeriksaan({ riwayat, loading, dataPasien, instansi }) {
 
           <iframe
             title="Pratinjau Kartu Rekam Medis"
-            srcDoc={buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat)}
+            srcDoc={buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat, berkasList)}
             className="w-full h-96 bg-gray-100"
           />
 
           <div className="px-3 py-2 border-t bg-gray-50">
             <button
               type="button"
-              onClick={() => cetakKartuRekamMedis(dataPasien, instansi, riwayat)}
+              onClick={() => cetakKartuRekamMedis(dataPasien, instansi, riwayat, berkasList)}
               className="w-full py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-[11px] font-semibold"
             >
               🖨️ Cetak Kartu RM (F4)
@@ -482,6 +671,7 @@ export default function DashboardLoket() {
   const [step, setStep] = useState('kategori')
   const [form, setForm] = useState(FORM_AWAL)
   const [polis, setPolis] = useState([])
+  const [petugasPoliList, setPetugasPoliList] = useState([]) // nakes aktif (dokter/PJ ruangan), dipakai untuk dipilih sebagai penanggung jawab pasien di poli tujuan
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [sukses, setSukses] = useState(false)
@@ -555,13 +745,14 @@ export default function DashboardLoket() {
 
     const { data } = await supabase
       .from('profiles')
-      .select('*, instansi:instansi_id(nama, jenis, kota, alamat, telepon, logo_url, nama_pemerintah, nama_dinas, email)')
+      .select('*, instansi:instansi_id(id, nama, jenis, kota, alamat, telepon, logo_url, nama_pemerintah, nama_dinas, email)')
       .eq('id', user.id)
       .single()
 
     setProfile(data)
     if (data?.instansi_id) {
       fetchPolis(data.instansi_id)
+      fetchPetugasPoli(data.instansi_id)
       fetchDashboardData(data.instansi_id)
       fetchRakList(data.instansi_id)
     }
@@ -643,7 +834,7 @@ export default function DashboardLoket() {
   // Buka halaman "Tambah Pasien" untuk rak tertentu.
   // Kalau pasienEdit diisi, form dibuka dalam mode edit (data pasien
   // tersebut dimuat ke form, bukan form kosong).
-  function bukaTambahPasienRak(rak, pasienEdit) {
+  async function bukaTambahPasienRak(rak, pasienEdit) {
     setPasienRakBaru(rak)
     if (pasienEdit) {
       setEditPasienRakId(pasienEdit.id)
@@ -663,18 +854,45 @@ export default function DashboardLoket() {
         pekerjaan: pasienEdit.pekerjaan || '',
         jenis_kelamin: pasienEdit.jenis_kelamin || '',
       })
-    } else {
-      setEditPasienRakId(null)
-      setFormPasienRak({ ...FORM_PASIEN_RAK_AWAL, no_rekam_medis: generateNoRM() })
+      setAnggotaKkRak([])
+      setPasienRakError('')
+      setPopupValidasiPasienRak(null)
+      return
     }
+    setEditPasienRakId(null)
+    // No. RM otomatis mengikuti kode rak + nomor urut berikutnya di rak itu.
+    // Sinkron dulu ke data asli di tabel pasien supaya nomornya pasti lanjut
+    // dari yang tertinggi, tidak lompat ke nomor kecil kalau counter basi.
+    setFormPasienRak({ ...FORM_PASIEN_RAK_AWAL, no_rekam_medis: '...' })
     setAnggotaKkRak([])
     setPasienRakError('')
     setPopupValidasiPasienRak(null)
+    await sinkronkanNomorUrutRak(rak.id)
+    const noRmBaru = await generateNoRmDariRak(rak.id)
+    setFormPasienRak((prev) => ({ ...prev, no_rekam_medis: noRmBaru || '' }))
   }
 
   // Buka form dalam mode edit untuk pasien yang sudah ada.
   function bukaEditPasienRak(rak, pasien) {
     bukaTambahPasienRak(rak, pasien)
+  }
+
+  // FITUR TAMBAH ANGGOTA: buka form "Tambah Pasien" KOSONG, tapi No. Rekam
+  // Medis sudah otomatis terisi dan TERKUNCI = sama dengan pasien grup yang
+  // diklik, supaya anggota baru ini gabung ke grup No. RM yang sama.
+  // Nomor Urut KK sengaja dikosongkan — diisi manual oleh petugas.
+  function bukaTambahAnggotaGrupRak(rak, pasienGrup) {
+    setPasienRakBaru(rak)
+    setEditPasienRakId(null) // ini tambah pasien BARU, bukan edit pasien yang sudah ada
+    setFormPasienRak({
+      ...FORM_PASIEN_RAK_AWAL,
+      no_rekam_medis: pasienGrup?.no_rekam_medis || '',
+      mode_rm: 'manual',
+      rm_terkunci: true,
+    })
+    setAnggotaKkRak([])
+    setPasienRakError('')
+    setPopupValidasiPasienRak(null)
   }
 
   function tutupTambahPasienRak() {
@@ -730,6 +948,44 @@ export default function DashboardLoket() {
     return true
   }
 
+  // Pisahkan satu pasien dari grup No. RM keluarganya ke No. RM BARU miliknya
+  // sendiri (mis. anak yang sudah menikah dan harus punya rekam medis sendiri).
+  // PENTING: ini hanya mengganti no_rekam_medis (dan rak_id kalau pindah rak)
+  // pada BARIS PASIEN YANG SAMA (id/pasien_id tidak berubah) — sehingga seluruh
+  // riwayat pemeriksaan (tabel kunjungan, yang terhubung lewat pasien_id) OTOMATIS
+  // ikut pindah ke No. RM baru tanpa perlu dipindah manual satu-satu.
+  async function pisahkanKeRmBaru(pasien, rakTujuanId) {
+    if (!rakTujuanId) {
+      window.alert('Pilih rak tujuan dulu.')
+      return null
+    }
+    await sinkronkanNomorUrutRak(rakTujuanId)
+    const noRmBaru = await generateNoRmDariRak(rakTujuanId)
+    if (!noRmBaru) {
+      window.alert('Gagal membuat No. RM baru. Coba lagi.')
+      return null
+    }
+    const { error } = await supabase
+      .from('pasien')
+      .update({
+        no_rekam_medis: noRmBaru,
+        rak_id: rakTujuanId,
+        // Pasien ini sekarang berdiri sendiri (KK sendiri), bukan lagi bagian
+        // dari grup lama -> urutan_kk & status_keluarga dikosongkan supaya tidak
+        // bingung, No. KK sengaja DIBIARKAN apa adanya (petugas bisa edit manual
+        // lewat tombol EDIT kalau memang sudah punya No. KK baru).
+        urutan_kk: null,
+        status_keluarga: null,
+        status_keluarga_lainnya: null,
+      })
+      .eq('id', pasien.id)
+    if (error) {
+      window.alert('Gagal memisahkan ke RM baru: ' + error.message)
+      return null
+    }
+    return noRmBaru
+  }
+
   // Cek No. KK di form tambah pasien rak — kalau KK sudah ada anggota
   // terdaftar, No. RM otomatis disamakan (konsisten dengan form pendaftaran utama).
   async function cekNoKkRak(noKk) {
@@ -765,11 +1021,20 @@ export default function DashboardLoket() {
 
   function handleChangeFormPasienRak(e) {
     const { name, value } = e.target
+    if (name === 'mode_rm' && value === 'otomatis') {
+      // No. RM otomatis harus mengikuti kode rak yang sedang dibuka, bukan acak.
+      setFormPasienRak((prev) => ({ ...prev, mode_rm: 'otomatis', no_rekam_medis: '...' }))
+      if (pasienRakBaru?.id) {
+        sinkronkanNomorUrutRak(pasienRakBaru.id).then(() => {
+          generateNoRmDariRak(pasienRakBaru.id).then((noRmBaru) => {
+            setFormPasienRak((prev) => ({ ...prev, no_rekam_medis: noRmBaru || '' }))
+          })
+        })
+      }
+      return
+    }
     setFormPasienRak((prev) => {
       const updated = { ...prev, [name]: value }
-      if (name === 'mode_rm' && value === 'otomatis') {
-        updated.no_rekam_medis = generateNoRM()
-      }
       // No. KK dan NIK hanya boleh berisi angka
       if (name === 'no_kk' || name === 'no_nik') {
         updated[name] = value.replace(/\D/g, '')
@@ -867,16 +1132,48 @@ export default function DashboardLoket() {
         return
       }
 
-      // Kalau No. RM ini sudah dipakai (mis. ikut No.KK keluarga), jangan insert
-      // pasien baru — cukup update data yang relevan di baris yang sudah ada.
-      const { data: pasienExisting, error: cekErr } = await supabase
+      // Cek apakah No. RM ini sudah dipakai pasien lain. No. RM BOLEH dipakai
+      // ulang HANYA kalau memang satu No. KK yang sama (anggota keluarga yang
+      // sama) — kalau No. KK beda (atau salah satunya kosong), ini dianggap
+      // tabrakan No. RM dan harus ditolak supaya tidak menimpa data pasien lain.
+      const { data: pasienSamaRm, error: cekErr } = await supabase
         .from('pasien')
-        .select('id')
+        .select('id, nama_lengkap, no_kk')
         .eq('instansi_id', profile.instansi_id)
         .eq('no_rekam_medis', formPasienRak.no_rekam_medis.trim())
-        .maybeSingle()
 
       if (cekErr) throw new Error(cekErr.message)
+
+      const noKkForm = formPasienRak.no_kk.trim()
+      const nikForm = formPasienRak.no_nik.trim()
+      let pasienExisting = null
+
+      if (pasienSamaRm && pasienSamaRm.length > 0) {
+        const kkCocok = noKkForm && pasienSamaRm.every((p) => (p.no_kk || '').trim() === noKkForm)
+
+        if (!kkCocok) {
+          // No. RM sudah dipakai pasien dengan No. KK berbeda (atau No. KK di
+          // form ini belum diisi) -> tolak, jangan sampai menimpa data orang lain.
+          throw new Error(
+            `Nomor rekam medis ${formPasienRak.no_rekam_medis.trim()} sudah dipakai oleh pasien lain ` +
+              `(${pasienSamaRm.map((p) => p.nama_lengkap).join(', ')}) dengan No. KK yang berbeda. ` +
+              `No. RM hanya boleh sama untuk anggota dalam satu Kartu Keluarga yang sama.`
+          )
+        }
+
+        // No. KK cocok -> ini anggota keluarga yang sama. Kalau NIK-nya juga
+        // sudah ada di grup ini berarti sedang menyimpan ulang pasien yang
+        // sama (update baris tsb), bukan bikin baris/anggota baru.
+        const { data: pasienNikSama, error: cekNikErr } = await supabase
+          .from('pasien')
+          .select('id')
+          .eq('instansi_id', profile.instansi_id)
+          .eq('no_rekam_medis', formPasienRak.no_rekam_medis.trim())
+          .eq('no_nik', nikForm)
+          .maybeSingle()
+        if (cekNikErr) throw new Error(cekNikErr.message)
+        pasienExisting = pasienNikSama
+      }
 
       const payload = {
         instansi_id: profile.instansi_id,
@@ -930,6 +1227,24 @@ export default function DashboardLoket() {
     }
 
     setPolis(data || [])
+  }
+
+  // Daftar nakes (dokter/PJ ruangan) aktif per poli — dipilih di loket saat pendaftaran
+  // sebagai penanggung jawab pasien di poli tujuan.
+  async function fetchPetugasPoli(instansiId) {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, nama_lengkap, profesi, poli_id')
+      .eq('instansi_id', instansiId)
+      .eq('role', 'nakes')
+      .eq('aktif', true)
+      .not('poli_id', 'is', null)
+
+    if (error) {
+      console.error('Error fetch petugas poli:', error.message)
+    }
+
+    setPetugasPoliList(data || [])
   }
 
   // FITUR 2 + 3 + 5(riwayat) + 10: satu query gabungan untuk seluruh data dashboard hari ini
@@ -1105,10 +1420,10 @@ export default function DashboardLoket() {
   }
 
   // FITUR PERIKSA DARI RAK: dipanggil dari tombol "🩺 PERIKSA" di tabel isi rak
-  // (lewat ModalKelolaRak). Mirip lanjutkanPasienLama, tapi pasiennya datang
-  // langsung dari baris tabel rak (bukan dari hasil pencarian pasienTerpilih),
-  // dan modal rak ditutup dulu sebelum form pendaftaran dibuka.
-  async function periksaPasienDariRak(pasien, kategori) {
+  // (lewat ModalKelolaRak). Alurnya: pilih Poli Tujuan → pilih Dokter/PJ Ruangan →
+  // pilih kategori BPJS/Umum (3 langkah, ditangani di popup wizard ModalKelolaRak).
+  // Setelah lengkap, form pendaftaran dibuka dengan poli & petugas sudah terisi.
+  async function periksaPasienDariRak(pasien, poliId, petugasPoliId, kategori) {
     setForm({
       ...FORM_AWAL,
       kategori_pasien: kategori,
@@ -1125,7 +1440,8 @@ export default function DashboardLoket() {
       urutan_kk: pasien.urutan_kk != null ? String(pasien.urutan_kk) : '',
       rak_id: pasien.rak_id || '',
       wilayah: pasien.wilayah || '',
-      poli_id: '',
+      poli_id: poliId || '',
+      petugas_poli_id: petugasPoliId || '',
       pasien_id_existing: pasien.id,
     })
     setPasienTerpilih(null)
@@ -1236,9 +1552,77 @@ export default function DashboardLoket() {
     }
   }
 
-  // Generate No. RM berbasis Rak: format {kode_rak}-{4 digit urut}
-  // nomor urut naik sendiri per rak (increment atomik lewat RPC di DB kalau tersedia,
-  // fallback: baca nomor_urut_terakhir lalu update +1)
+  // Ambil bagian angka murni dari No. RM (buang semua karakter non-angka).
+  // Dipakai untuk membaca angka urut tertinggi dari data lama yang formatnya
+  // tidak konsisten (mis. "A.AO.0271" atau "A-A0-0033" sama-sama dibaca sebagai
+  // angka 271 / 33).
+  function angkaUrutDariNoRm(noRm) {
+    if (!noRm) return 0
+    const digitSaja = noRm.replace(/\D/g, '')
+    if (!digitSaja) return 0
+    return parseInt(digitSaja, 10)
+  }
+
+  // Sinkronkan nomor_urut_terakhir satu rak dengan angka urut TERTINGGI yang
+  // benar-benar ada di tabel pasien untuk rak itu (bukan percaya pada counter
+  // yang mungkin sudah basi/tidak pernah diupdate). Dipakai sebelum generate
+  // No. RM baru, supaya nomor barunya pasti lanjut dari data asli, bukan
+  // lompat balik ke nomor kecil.
+  async function sinkronkanNomorUrutRak(rakId) {
+    const PAGE_SIZE = 1000
+    let semua = []
+    let dari = 0
+    while (true) {
+      const { data, error } = await supabase
+        .from('pasien')
+        .select('no_rekam_medis')
+        .eq('rak_id', rakId)
+        .range(dari, dari + PAGE_SIZE - 1)
+      if (error) {
+        console.error('Gagal sinkron nomor urut rak:', error.message)
+        return null
+      }
+      semua = semua.concat(data || [])
+      if (!data || data.length < PAGE_SIZE) break
+      dari += PAGE_SIZE
+    }
+
+    const angkaTertinggi = semua.reduce(
+      (max, p) => Math.max(max, angkaUrutDariNoRm(p.no_rekam_medis)),
+      0
+    )
+
+    const { data: updated, error: updateErr } = await supabase
+      .from('rak_rm')
+      .update({ nomor_urut_terakhir: angkaTertinggi })
+      .eq('id', rakId)
+      .select('nomor_urut_terakhir')
+      .single()
+
+    if (updateErr) {
+      console.error('Gagal update nomor_urut_terakhir:', updateErr.message)
+      return null
+    }
+
+    setRakList((prev) =>
+      prev.map((r) => (r.id === rakId ? { ...r, nomor_urut_terakhir: updated.nomor_urut_terakhir } : r))
+    )
+    return updated.nomor_urut_terakhir
+  }
+
+  // Sinkronkan SEMUA rak milik instansi sekaligus. Dipakai lewat tombol
+  // "Sinkronkan Nomor Urut" di halaman Kelola Rak.
+  async function sinkronkanSemuaRak() {
+    for (const rak of rakList) {
+      await sinkronkanNomorUrutRak(rak.id)
+    }
+  }
+
+  // Generate No. RM berbasis Rak: format seragam {kode_rak}-{4 digit urut}
+  // (mis. A-A0-0001). Nomor urut naik sendiri per rak, mengikuti nomor_urut_terakhir
+  // yang sudah disinkronkan dengan data asli di tabel pasien (lihat
+  // sinkronkanNomorUrutRak) — sehingga nomor baru dijamin lanjut dari nomor
+  // tertinggi yang benar-benar ada, bukan lompat ke nomor kecil.
   async function generateNoRmDariRak(rakId) {
     const rak = rakList.find((r) => r.id === rakId)
     if (!rak) return ''
@@ -1282,6 +1666,7 @@ export default function DashboardLoket() {
     if (kkChecked && anggotaKeluarga.length > 0 && anggotaKeluarga[0].no_rekam_medis) {
       return
     }
+    await sinkronkanNomorUrutRak(rakId)
     const noRmBaru = await generateNoRmDariRak(rakId)
     if (noRmBaru) {
       setForm((prev) => ({ ...prev, no_rekam_medis: noRmBaru, mode_rm: 'otomatis' }))
@@ -1305,23 +1690,6 @@ export default function DashboardLoket() {
 
     const terakhir = data?.nomor_antrian || 0
     return terakhir + 1
-  }
-
-  function pilihKategori(kategori) {
-    const noRm = generateNoRM()
-    setForm({
-      ...FORM_AWAL,
-      kategori_pasien: kategori,
-      no_rekam_medis: noRm,
-      tanggal_periksa: todayStr(),
-    })
-    setAnggotaKeluarga([])
-    setKkChecked(false)
-    setNikDitemukan(false)
-    setRiwayatPasien([])
-    setStep('form')
-    setError('')
-    setSukses(false)
   }
 
   function handleChange(e) {
@@ -1454,6 +1822,7 @@ export default function DashboardLoket() {
           instansi_id: profile.instansi_id,
           pasien_id: pasienId,
           poli_id: form.poli_id,
+          petugas_poli_id: form.petugas_poli_id || null,
           loket_id: profile.id,
           tanggal_periksa: form.tanggal_periksa,
           kategori_pasien: form.kategori_pasien,
@@ -1485,16 +1854,10 @@ export default function DashboardLoket() {
     }
   }
 
-  // FITUR 7: Shortcut keyboard — F1 (BPJS), F2 (Umum), Esc (Kembali), Ctrl+S (Simpan)
+  // FITUR 7: Shortcut keyboard — Esc (Kembali), Ctrl+S (Simpan)
   useEffect(() => {
     function handleKeyDown(e) {
-      if (e.key === 'F1' && step === 'kategori') {
-        e.preventDefault()
-        pilihKategori('bpjs')
-      } else if (e.key === 'F2' && step === 'kategori') {
-        e.preventDefault()
-        pilihKategori('umum')
-      } else if (e.key === 'Escape') {
+      if (e.key === 'Escape') {
         if (step === 'form' || step === 'cari') {
           e.preventDefault()
           setStep('kategori')
@@ -1528,7 +1891,7 @@ export default function DashboardLoket() {
             <h1 className="text-2xl font-bold text-gray-800">Pendaftaran Pasien</h1>
             <p className="text-gray-500 mt-1">{profile?.instansi?.nama || ''}</p>
             <p className="text-xs text-gray-400 mt-1">
-              Shortcut: <b>F1</b> BPJS · <b>F2</b> Umum · <b>Esc</b> Kembali · <b>Ctrl+S</b> Simpan
+              Shortcut: <b>Esc</b> Kembali · <b>Ctrl+S</b> Simpan
             </p>
           </div>
 
@@ -1552,35 +1915,8 @@ export default function DashboardLoket() {
             {/* ── Kolom kiri: aksi utama ── */}
             <div className="lg:col-span-2 space-y-6">
               <div className="bg-white rounded-2xl shadow-sm p-6">
-                <p className="text-gray-600 mb-4 font-medium">Pilih kategori pasien:</p>
+                <p className="text-gray-600 mb-4 font-medium">Menu loket:</p>
                 <div className="flex flex-wrap gap-6">
-                  <button
-                    onClick={() => pilihKategori('bpjs')}
-                    className="w-40 h-40 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition"
-                  >
-                    <span className="text-4xl">🏥</span>
-                    <span className="text-lg font-bold">BPJS</span>
-                    <span className="text-xs opacity-80">F1</span>
-                  </button>
-
-                  <button
-                    onClick={() => pilihKategori('umum')}
-                    className="w-40 h-40 rounded-2xl bg-teal-600 hover:bg-teal-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition"
-                  >
-                    <span className="text-4xl">👤</span>
-                    <span className="text-lg font-bold">UMUM</span>
-                    <span className="text-xs opacity-80">F2</span>
-                  </button>
-
-                  {/* FITUR 1: Pencarian pasien lama */}
-                  <button
-                    onClick={() => setStep('cari')}
-                    className="w-40 h-40 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition"
-                  >
-                    <span className="text-4xl">🔍</span>
-                    <span className="text-lg font-bold text-center leading-tight">PASIEN LAMA</span>
-                  </button>
-
                   <button
                     onClick={() => {
                       const url = new URL(window.location.href)
@@ -1745,11 +2081,14 @@ export default function DashboardLoket() {
         onSubmit={simpanRak}
         onEdit={editRak}
         onDelete={hapusRak}
+        onPisahkanRmBaru={pisahkanKeRmBaru}
+        onSinkronSemua={sinkronkanSemuaRak}
         instansiId={profile?.instansi_id}
         pasienRakBaru={pasienRakBaru}
         editPasienRakId={editPasienRakId}
         onBukaTambahPasien={bukaTambahPasienRak}
         onEditPasienRak={bukaEditPasienRak}
+        onTambahAnggotaGrup={bukaTambahAnggotaGrupRak}
         onHapusPasienRak={hapusPasienRak}
         onTutupTambahPasien={tutupTambahPasienRak}
         formPasienRak={formPasienRak}
@@ -1768,6 +2107,8 @@ export default function DashboardLoket() {
         popupValidasi={popupValidasiPasienRak}
         onTutupPopupValidasi={() => setPopupValidasiPasienRak(null)}
         onPeriksaPasienRak={periksaPasienDariRak}
+        polis={polis}
+        petugasPoliList={petugasPoliList}
       />
       </div>
     )
@@ -1849,7 +2190,7 @@ export default function DashboardLoket() {
 
           {/* Konfirmasi kategori setelah pasien dipilih */}
           {pasienTerpilih && (
-            <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-6 z-50">
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-6 z-40">
               <div className="bg-white rounded-2xl shadow-xl p-6 w-full max-w-3xl text-center max-h-[90vh] overflow-y-auto">
                 <p className="text-sm text-gray-500 mb-1">Pasien ditemukan</p>
                 <p className="font-bold text-gray-800 text-lg mb-4">{pasienTerpilih.nama_lengkap}</p>
@@ -1860,6 +2201,7 @@ export default function DashboardLoket() {
                   loading={riwayatPasienLoading}
                   dataPasien={pasienTerpilih}
                   instansi={profile?.instansi}
+                  profile={profile}
                 />
 
                 <p className="text-sm text-gray-600 mb-4">Pilih kategori kunjungan hari ini:</p>
@@ -1953,6 +2295,7 @@ export default function DashboardLoket() {
             riwayat={riwayatPasien}
             loading={riwayatPasienLoading}
             dataPasien={{
+              id: form.pasien_id_existing,
               nama_lengkap: form.nama_lengkap,
               tanggal_lahir: form.tanggal_lahir,
               alamat: form.alamat,
@@ -1963,6 +2306,7 @@ export default function DashboardLoket() {
               no_rekam_medis: form.no_rekam_medis,
             }}
             instansi={profile?.instansi}
+            profile={profile}
           />
         )}
 
@@ -2310,7 +2654,11 @@ export default function DashboardLoket() {
             <select
               name="poli_id"
               value={form.poli_id}
-              onChange={handleChange}
+              onChange={(e) => {
+                handleChange(e)
+                // Ganti poli → petugas yang tersimpan sebelumnya belum tentu bertugas di poli baru, reset.
+                setForm((prev) => ({ ...prev, petugas_poli_id: '' }))
+              }}
               className="w-full border rounded-lg px-3 py-2 text-sm"
             >
               <option value="">-- Pilih Poli --</option>
@@ -2319,6 +2667,31 @@ export default function DashboardLoket() {
                   {p.nama_poli}
                 </option>
               ))}
+            </select>
+          </div>
+
+          {/* Dokter / PJ Ruangan — difilter sesuai poli tujuan yang dipilih */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Dokter/PJ Ruangan
+            </label>
+            <select
+              name="petugas_poli_id"
+              value={form.petugas_poli_id}
+              onChange={handleChange}
+              disabled={!form.poli_id}
+              className="w-full border rounded-lg px-3 py-2 text-sm disabled:bg-gray-100 disabled:text-gray-400"
+            >
+              <option value="">
+                {form.poli_id ? '-- Pilih Dokter/PJ Ruangan --' : 'Pilih poli tujuan dahulu'}
+              </option>
+              {petugasPoliList
+                .filter((pt) => pt.poli_id === form.poli_id)
+                .map((pt) => (
+                  <option key={pt.id} value={pt.id}>
+                    {pt.nama_lengkap}{pt.profesi ? ` — ${pt.profesi}` : ''}
+                  </option>
+                ))}
             </select>
           </div>
 
@@ -2380,11 +2753,14 @@ export default function DashboardLoket() {
         onSubmit={simpanRak}
         onEdit={editRak}
         onDelete={hapusRak}
+        onPisahkanRmBaru={pisahkanKeRmBaru}
+        onSinkronSemua={sinkronkanSemuaRak}
         instansiId={profile?.instansi_id}
         pasienRakBaru={pasienRakBaru}
         editPasienRakId={editPasienRakId}
         onBukaTambahPasien={bukaTambahPasienRak}
         onEditPasienRak={bukaEditPasienRak}
+        onTambahAnggotaGrup={bukaTambahAnggotaGrupRak}
         onHapusPasienRak={hapusPasienRak}
         onTutupTambahPasien={tutupTambahPasienRak}
         formPasienRak={formPasienRak}
@@ -2403,6 +2779,8 @@ export default function DashboardLoket() {
         popupValidasi={popupValidasiPasienRak}
         onTutupPopupValidasi={() => setPopupValidasiPasienRak(null)}
         onPeriksaPasienRak={periksaPasienDariRak}
+        polis={polis}
+        petugasPoliList={petugasPoliList}
       />
     </div>
   )
@@ -2423,11 +2801,14 @@ function ModalKelolaRak({
   onSubmit,
   onEdit,
   onDelete,
+  onPisahkanRmBaru,
+  onSinkronSemua,
   instansiId,
   pasienRakBaru,
   editPasienRakId,
   onBukaTambahPasien,
   onEditPasienRak,
+  onTambahAnggotaGrup,
   onHapusPasienRak,
   onTutupTambahPasien,
   formPasienRak,
@@ -2446,10 +2827,34 @@ function ModalKelolaRak({
   popupValidasi,
   onTutupPopupValidasi,
   onPeriksaPasienRak,
+  polis,
+  petugasPoliList,
 }) {
-  // Pasien yang sedang dipilih untuk fitur PERIKSA (popup pilih BPJS/Umum)
+  // Pasien yang sedang dipilih untuk fitur PERIKSA (wizard 3 langkah: poli → petugas → kategori)
   const [pasienPeriksaDipilih, setPasienPeriksaDipilih] = useState(null)
+  const [langkahPeriksa, setLangkahPeriksa] = useState('poli') // 'poli' | 'petugas' | 'kategori'
+  const [poliPeriksaDipilih, setPoliPeriksaDipilih] = useState(null)
+  const [petugasPeriksaDipilih, setPetugasPeriksaDipilih] = useState(null)
+
+  // Buka wizard PERIKSA dari awal (langkah pilih poli) untuk pasien p.
+  function bukaWizardPeriksa(p) {
+    setPasienPeriksaDipilih(p)
+    setLangkahPeriksa('poli')
+    setPoliPeriksaDipilih(null)
+    setPetugasPeriksaDipilih(null)
+  }
+
+  function tutupWizardPeriksa() {
+    setPasienPeriksaDipilih(null)
+    setLangkahPeriksa('poli')
+    setPoliPeriksaDipilih(null)
+    setPetugasPeriksaDipilih(null)
+  }
   const [rakDilihat, setRakDilihat] = useState(null) // rak yang sedang dibuka isinya
+  const [sinkronLoading, setSinkronLoading] = useState(false) // status tombol Sinkronkan Nomor Urut
+  const [pasienPisahDipilih, setPasienPisahDipilih] = useState(null) // pasien yang mau dipisah ke RM baru
+  const [rakTujuanPisah, setRakTujuanPisah] = useState('') // rak tujuan untuk RM baru
+  const [pisahLoading, setPisahLoading] = useState(false)
   const [isiRak, setIsiRak] = useState([])
   const [isiRakLoading, setIsiRakLoading] = useState(false)
   const [isiRakError, setIsiRakError] = useState('') // pesan error saat gagal memuat isi rak (mis. RLS, kolom salah)
@@ -2696,7 +3101,7 @@ function ModalKelolaRak({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-40 p-4">
       <div className="bg-white rounded-2xl shadow-lg w-full max-w-[98vw] max-h-[95vh] overflow-y-auto">
         <div className="flex items-center justify-between p-5 border-b sticky top-0 bg-white">
           <h2 className="font-bold text-gray-800">🗄️ KELOLA RAK REKAM MEDIS</h2>
@@ -2709,12 +3114,30 @@ function ModalKelolaRak({
         </div>
 
         <div className="p-5 space-y-4">
-          <p className="text-xs text-gray-500">
-            Buat kode rak sesuai cara Anda sendiri (mis. berdasarkan desa/dusun: <b>A.A0</b>,
-            atau format lain seperti <b>RAK-1</b>). No. Rekam Medis akan dibuat otomatis
-            dari kode rak yang dipilih saat pendaftaran. Klik salah satu rak di daftar
-            untuk melihat isinya (daftar pasien yang tersimpan di rak itu).
-          </p>
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <p className="text-xs text-gray-500 flex-1 min-w-[240px]">
+              Buat kode rak sesuai cara Anda sendiri (mis. berdasarkan desa/dusun: <b>A-A0</b>,
+              atau format lain seperti <b>RAK-1</b>). No. Rekam Medis akan dibuat otomatis
+              dengan format <b>{'{kode_rak}'}-0001</b> dan seterusnya, mengikuti nomor urut
+              tertinggi yang sudah ada di rak itu. Klik salah satu rak di daftar
+              untuk melihat isinya (daftar pasien yang tersimpan di rak itu).
+            </p>
+            {onSinkronSemua && (
+              <button
+                type="button"
+                onClick={async () => {
+                  setSinkronLoading(true)
+                  await onSinkronSemua()
+                  setSinkronLoading(false)
+                }}
+                disabled={sinkronLoading}
+                title="Samakan nomor urut tiap rak dengan No. RM tertinggi yang benar-benar ada di data pasien, supaya No. RM otomatis berikutnya tidak lompat/dobel"
+                className="shrink-0 text-xs px-3 py-1.5 rounded-lg border border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100 font-medium disabled:opacity-50 whitespace-nowrap"
+              >
+                {sinkronLoading ? 'Menyinkronkan...' : '🔄 Sinkronkan Nomor Urut'}
+              </button>
+            )}
+          </div>
 
           {rakError && (
             <div className="bg-red-50 border border-red-200 text-red-600 rounded-lg px-3 py-2 text-xs">
@@ -2981,34 +3404,62 @@ function ModalKelolaRak({
                             <td className="px-2 py-1.5 truncate text-center align-middle text-black border-2 border-black" title={p.alamat}>{p.alamat || '-'}</td>
                             <td className="px-2 py-1.5 text-center align-middle text-black border-2 border-black">{p.jenis_kelamin === 'L' ? 'L' : p.jenis_kelamin === 'P' ? 'P' : '-'}</td>
                             <td className="px-2 py-1.5 text-center align-middle border-2 border-black">
-                              <div className="flex gap-1 justify-center flex-wrap">
+                              <div className="flex flex-col gap-1 items-stretch">
                                 <button
                                   type="button"
                                   onClick={() => setGrupRmDilihat(g)}
                                   title="Lihat semua pasien dengan No. RM ini"
-                                  className="text-[10px] px-1.5 py-0.5 rounded bg-teal-50 text-teal-700 hover:bg-teal-100 font-medium whitespace-nowrap"
+                                  className="text-[10px] px-2 py-1 rounded bg-teal-600 hover:bg-teal-700 text-white font-semibold whitespace-nowrap"
                                 >
-                                  👁 {jumlah}
+                                  👁 Lihat Isi RM ({jumlah})
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => onEditPasienRak(rakDilihat, p)}
-                                  className="text-[10px] px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 font-medium"
+                                  className="text-[10px] px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white font-semibold"
                                 >
                                   EDIT
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => setPasienPeriksaDipilih(p)}
+                                  onClick={() => onTambahAnggotaGrup && onTambahAnggotaGrup(rakDilihat, p)}
+                                  title="Tambah anggota baru ke grup No. RM ini"
+                                  className="text-[10px] px-2 py-1 rounded bg-purple-600 hover:bg-purple-700 text-white font-semibold whitespace-nowrap"
+                                >
+                                  ➕ Tambah Anggota
+                                </button>
+                                {onPisahkanRmBaru && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (jumlah > 1) {
+                                        window.alert(
+                                          'Grup ini punya lebih dari satu anggota. Buka "👁 Lihat Isi RM" dulu, lalu pilih anggota yang mau dipisahkan.'
+                                        )
+                                        setGrupRmDilihat(g)
+                                        return
+                                      }
+                                      setRakTujuanPisah(rakDilihat?.id || '')
+                                      setPasienPisahDipilih(p)
+                                    }}
+                                    title="Pisahkan pasien ini ke No. RM baru (mis. anak yang sudah menikah). Riwayat pemeriksaan otomatis ikut ke RM baru."
+                                    className="text-[10px] px-2 py-1 rounded bg-amber-600 hover:bg-amber-700 text-white font-semibold whitespace-nowrap"
+                                  >
+                                    🔀 Pisah RM
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => bukaWizardPeriksa(p)}
                                   title="Periksa pasien ini (buka form pendaftaran)"
-                                  className="text-[10px] px-1.5 py-0.5 rounded bg-green-50 text-green-700 hover:bg-green-100 font-medium whitespace-nowrap"
+                                  className="text-[10px] px-2 py-1 rounded bg-green-600 hover:bg-green-700 text-white font-semibold whitespace-nowrap"
                                 >
                                   🩺 PERIKSA
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => handleHapusPasien(p.id)}
-                                  className="text-[10px] px-1.5 py-0.5 rounded bg-red-50 text-red-600 hover:bg-red-100 font-medium"
+                                  className="text-[10px] px-2 py-1 rounded bg-red-600 hover:bg-red-700 text-white font-semibold"
                                 >
                                   HAPUS
                                 </button>
@@ -3026,11 +3477,13 @@ function ModalKelolaRak({
         </div>
       </div>
 
-      {/* Popup pilih kategori pemeriksaan (BPJS / Umum) untuk pasien dari tabel rak */}
+      {/* Wizard PERIKSA pasien dari tabel rak: 1) pilih Poli Tujuan, 2) pilih Dokter/PJ Ruangan
+          yang bertugas di poli itu, 3) pilih kategori BPJS/Umum. Baru setelah lengkap,
+          form pendaftaran dibuka lewat onPeriksaPasienRak. */}
       {pasienPeriksaDipilih && (
         <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[80] p-4"
-          onClick={() => setPasienPeriksaDipilih(null)}
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4"
+          onClick={tutupWizardPeriksa}
         >
           <div
             className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-5"
@@ -3039,36 +3492,133 @@ function ModalKelolaRak({
             <p className="text-sm font-semibold text-gray-800 text-center mb-1">
               Periksa Pasien
             </p>
-            <p className="text-xs text-gray-500 text-center mb-4 truncate" title={pasienPeriksaDipilih.nama_lengkap}>
+            <p className="text-xs text-gray-500 text-center mb-1 truncate" title={pasienPeriksaDipilih.nama_lengkap}>
               {pasienPeriksaDipilih.nama_lengkap}
             </p>
-            <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  const p = pasienPeriksaDipilih
-                  setPasienPeriksaDipilih(null)
-                  onPeriksaPasienRak && onPeriksaPasienRak(p, 'bpjs')
-                }}
-                className="w-full py-3 rounded-xl bg-teal-600 text-white font-semibold text-sm hover:bg-teal-700"
-              >
-                BPJS
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const p = pasienPeriksaDipilih
-                  setPasienPeriksaDipilih(null)
-                  onPeriksaPasienRak && onPeriksaPasienRak(p, 'umum')
-                }}
-                className="w-full py-3 rounded-xl bg-gray-700 text-white font-semibold text-sm hover:bg-gray-800"
-              >
-                UMUM
-              </button>
+            {/* Indikator langkah */}
+            <div className="flex items-center justify-center gap-1.5 mb-4">
+              {['poli', 'petugas', 'kategori'].map((lk, i) => (
+                <span
+                  key={lk}
+                  className={`h-1.5 rounded-full transition-all ${
+                    langkahPeriksa === lk
+                      ? 'w-6 bg-teal-600'
+                      : (['poli', 'petugas', 'kategori'].indexOf(langkahPeriksa) > i)
+                        ? 'w-1.5 bg-teal-300'
+                        : 'w-1.5 bg-gray-200'
+                  }`}
+                />
+              ))}
             </div>
+
+            {/* Langkah 1: Poli Tujuan */}
+            {langkahPeriksa === 'poli' && (
+              <div className="flex flex-col gap-2">
+                <p className="text-xs font-medium text-gray-500 mb-1">Pilih poli tujuan:</p>
+                {(!polis || polis.length === 0) && (
+                  <p className="text-xs text-gray-400 text-center py-3">Belum ada poli yang ditambahkan admin instansi.</p>
+                )}
+                <div className="max-h-64 overflow-y-auto flex flex-col gap-2">
+                  {(polis || []).map((poli) => (
+                    <button
+                      key={poli.id}
+                      type="button"
+                      onClick={() => {
+                        setPoliPeriksaDipilih(poli)
+                        setLangkahPeriksa('petugas')
+                      }}
+                      className="w-full py-2.5 px-3 rounded-xl border border-gray-200 text-left text-sm font-medium text-gray-700 hover:border-teal-500 hover:bg-teal-50"
+                    >
+                      {poli.nama_poli}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Langkah 2: Dokter / PJ Ruangan (difilter sesuai poli terpilih) */}
+            {langkahPeriksa === 'petugas' && (() => {
+              const daftarPetugas = (petugasPoliList || []).filter((pt) => pt.poli_id === poliPeriksaDipilih?.id)
+              return (
+                <div className="flex flex-col gap-2">
+                  <p className="text-xs font-medium text-gray-500 mb-1">
+                    Pilih dokter/PJ ruangan — {poliPeriksaDipilih?.nama_poli}:
+                  </p>
+                  {daftarPetugas.length === 0 && (
+                    <p className="text-xs text-gray-400 text-center py-3">Belum ada nakes yang ditugaskan di poli ini.</p>
+                  )}
+                  <div className="max-h-64 overflow-y-auto flex flex-col gap-2">
+                    {daftarPetugas.map((pt) => (
+                      <button
+                        key={pt.id}
+                        type="button"
+                        onClick={() => {
+                          setPetugasPeriksaDipilih(pt)
+                          setLangkahPeriksa('kategori')
+                        }}
+                        className="w-full py-2.5 px-3 rounded-xl border border-gray-200 text-left hover:border-teal-500 hover:bg-teal-50"
+                      >
+                        <span className="block text-sm font-medium text-gray-700">{pt.nama_lengkap}</span>
+                        {pt.profesi && <span className="block text-[11px] text-gray-400">{pt.profesi}</span>}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setLangkahPeriksa('poli')}
+                    className="w-full mt-1 py-1.5 text-xs text-gray-400 hover:text-gray-600"
+                  >
+                    ← Kembali pilih poli
+                  </button>
+                </div>
+              )
+            })()}
+
+            {/* Langkah 3: Kategori BPJS/Umum */}
+            {langkahPeriksa === 'kategori' && (
+              <div className="flex flex-col gap-2">
+                <p className="text-xs font-medium text-gray-500 mb-1">
+                  {poliPeriksaDipilih?.nama_poli} — {petugasPeriksaDipilih?.nama_lengkap}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const p = pasienPeriksaDipilih
+                    const poliId = poliPeriksaDipilih?.id
+                    const petugasId = petugasPeriksaDipilih?.id
+                    tutupWizardPeriksa()
+                    onPeriksaPasienRak && onPeriksaPasienRak(p, poliId, petugasId, 'bpjs')
+                  }}
+                  className="w-full py-3 rounded-xl bg-teal-600 text-white font-semibold text-sm hover:bg-teal-700"
+                >
+                  BPJS
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const p = pasienPeriksaDipilih
+                    const poliId = poliPeriksaDipilih?.id
+                    const petugasId = petugasPeriksaDipilih?.id
+                    tutupWizardPeriksa()
+                    onPeriksaPasienRak && onPeriksaPasienRak(p, poliId, petugasId, 'umum')
+                  }}
+                  className="w-full py-3 rounded-xl bg-gray-700 text-white font-semibold text-sm hover:bg-gray-800"
+                >
+                  UMUM
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLangkahPeriksa('petugas')}
+                  className="w-full mt-1 py-1.5 text-xs text-gray-400 hover:text-gray-600"
+                >
+                  ← Kembali pilih petugas
+                </button>
+              </div>
+            )}
+
             <button
               type="button"
-              onClick={() => setPasienPeriksaDipilih(null)}
+              onClick={tutupWizardPeriksa}
               className="w-full mt-3 py-1.5 text-xs text-gray-400 hover:text-gray-600"
             >
               Batal
@@ -3080,7 +3630,7 @@ function ModalKelolaRak({
       {/* Modal detail: semua pasien dengan No. RM yang sama (satu keluarga) */}
       {grupRmDilihatTerbaru && (
         <div
-          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4"
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
           onClick={() => setGrupRmDilihat(null)}
         >
           <div
@@ -3139,7 +3689,31 @@ function ModalKelolaRak({
                       type="button"
                       onClick={() => {
                         setGrupRmDilihat(null)
-                        setPasienPeriksaDipilih(p)
+                        onTambahAnggotaGrup && onTambahAnggotaGrup(rakDilihat, p)
+                      }}
+                      title="Tambah anggota baru ke grup No. RM ini"
+                      className="text-[10px] px-1.5 py-0.5 rounded bg-purple-50 text-purple-700 hover:bg-purple-100 font-medium whitespace-nowrap"
+                    >
+                      ➕ Tambah Anggota
+                    </button>
+                    {onPisahkanRmBaru && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRakTujuanPisah(rakDilihat?.id || '')
+                          setPasienPisahDipilih(p)
+                        }}
+                        title="Pisahkan pasien ini ke No. RM baru (mis. anak yang sudah menikah). Riwayat pemeriksaan otomatis ikut ke RM baru."
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 hover:bg-amber-100 font-medium whitespace-nowrap"
+                      >
+                        🔀 Pisah RM
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGrupRmDilihat(null)
+                        bukaWizardPeriksa(p)
                       }}
                       title="Periksa pasien ini (buka form pendaftaran)"
                       className="text-[10px] px-1.5 py-0.5 rounded bg-green-50 text-green-700 hover:bg-green-100 font-medium whitespace-nowrap"
@@ -3156,6 +3730,71 @@ function ModalKelolaRak({
                   </div>
                 </div>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dialog pilih rak tujuan untuk Pisah RM Baru */}
+      {pasienPisahDipilih && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4"
+          onClick={() => !pisahLoading && setPasienPisahDipilih(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-sm font-semibold text-gray-800 mb-1">
+              🔀 Pisahkan ke No. RM Baru
+            </p>
+            <p className="text-xs text-gray-500 mb-3">
+              <b>{pasienPisahDipilih.nama_lengkap}</b> akan diberi No. RM baru dan tidak
+              lagi tergabung dalam grup KK lama. Seluruh riwayat pemeriksaan pasien ini
+              otomatis ikut pindah ke No. RM baru.
+            </p>
+            <label className="block text-xs font-medium text-gray-600 mb-1">
+              Rak tujuan untuk No. RM baru
+            </label>
+            <select
+              value={rakTujuanPisah}
+              onChange={(e) => setRakTujuanPisah(e.target.value)}
+              className="w-full border rounded-lg px-3 py-2 text-sm bg-white mb-4"
+            >
+              <option value="">-- Pilih Rak --</option>
+              {rakList.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.kode_rak}{r.nama_rak ? ` — ${r.nama_rak}` : ''}
+                </option>
+              ))}
+            </select>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setPasienPisahDipilih(null)}
+                disabled={pisahLoading}
+                className="flex-1 py-2 rounded-lg border border-gray-300 text-gray-600 text-sm font-semibold disabled:opacity-50"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setPisahLoading(true)
+                  const noRmBaru = await onPisahkanRmBaru(pasienPisahDipilih, rakTujuanPisah)
+                  setPisahLoading(false)
+                  if (noRmBaru) {
+                    window.alert(`Berhasil. No. RM baru: ${noRmBaru}`)
+                    setPasienPisahDipilih(null)
+                    setGrupRmDilihat(null)
+                    await refreshIsiRakDilihat()
+                  }
+                }}
+                disabled={pisahLoading || !rakTujuanPisah}
+                className="flex-1 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-sm font-semibold disabled:opacity-50"
+              >
+                {pisahLoading ? 'Memproses...' : 'Pisahkan'}
+              </button>
             </div>
           </div>
         </div>
@@ -3190,7 +3829,7 @@ function FormTambahPasienRak({
   onTutupPopupValidasi,
 }) {
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-40 p-4">
       <div className="bg-white rounded-2xl shadow-lg max-w-lg w-full max-h-[85vh] overflow-y-auto">
         <div className="flex items-center gap-2 p-5 border-b sticky top-0 bg-white">
           <button
@@ -3332,30 +3971,36 @@ function FormTambahPasienRak({
             <label className="block text-xs font-medium text-gray-600 mb-1">
               Nomor Rekam Medis <span className="text-red-500">*</span>
             </label>
-            <div className="flex gap-2 mb-1.5">
-              <button
-                type="button"
-                onClick={() => onChange({ target: { name: 'mode_rm', value: 'otomatis' } })}
-                className={`text-[11px] px-2 py-1 rounded-lg border ${
-                  form.mode_rm === 'otomatis'
-                    ? 'bg-teal-600 text-white border-teal-600'
-                    : 'border-gray-300 text-gray-600'
-                }`}
-              >
-                Otomatis
-              </button>
-              <button
-                type="button"
-                onClick={() => onChange({ target: { name: 'mode_rm', value: 'manual' } })}
-                className={`text-[11px] px-2 py-1 rounded-lg border ${
-                  form.mode_rm === 'manual'
-                    ? 'bg-teal-600 text-white border-teal-600'
-                    : 'border-gray-300 text-gray-600'
-                }`}
-              >
-                Manual
-              </button>
-            </div>
+            {form.rm_terkunci ? (
+              <p className="text-[11px] text-teal-700 bg-teal-50 border border-teal-200 rounded-lg px-2.5 py-1.5 mb-1.5">
+                🔗 Digabung ke grup No. RM ini — nomor tidak bisa diubah.
+              </p>
+            ) : (
+              <div className="flex gap-2 mb-1.5">
+                <button
+                  type="button"
+                  onClick={() => onChange({ target: { name: 'mode_rm', value: 'otomatis' } })}
+                  className={`text-[11px] px-2 py-1 rounded-lg border ${
+                    form.mode_rm === 'otomatis'
+                      ? 'bg-teal-600 text-white border-teal-600'
+                      : 'border-gray-300 text-gray-600'
+                  }`}
+                >
+                  Otomatis
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChange({ target: { name: 'mode_rm', value: 'manual' } })}
+                  className={`text-[11px] px-2 py-1 rounded-lg border ${
+                    form.mode_rm === 'manual'
+                      ? 'bg-teal-600 text-white border-teal-600'
+                      : 'border-gray-300 text-gray-600'
+                  }`}
+                >
+                  Manual
+                </button>
+              </div>
+            )}
             <input
               type="text"
               name="no_rekam_medis"
@@ -3363,9 +4008,9 @@ function FormTambahPasienRak({
               ref={refNoRm}
               value={form.no_rekam_medis}
               onChange={onChange}
-              readOnly={form.mode_rm === 'otomatis'}
+              readOnly={form.mode_rm === 'otomatis' || form.rm_terkunci}
               className={`w-full border rounded-lg px-3 py-2 text-sm ${
-                form.mode_rm === 'otomatis' ? 'bg-gray-50 text-gray-500' : ''
+                form.mode_rm === 'otomatis' || form.rm_terkunci ? 'bg-gray-50 text-gray-500' : ''
               }`}
             />
           </div>
@@ -3559,7 +4204,7 @@ function FormTambahPasienRak({
           field wajib yang kosong/tidak valid. Fokus ke field baru dijalankan
           setelah tombol OK diklik. */}
       {popupValidasi && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
           <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-5">
             <div className="flex items-start gap-3">
               <span className="text-2xl shrink-0">⚠️</span>
