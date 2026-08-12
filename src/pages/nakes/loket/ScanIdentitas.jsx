@@ -237,6 +237,8 @@ function ModalKameraScan({ onAmbilFoto, onTutup, memproses, errorScan, progresOc
   const streamRef = useRef(null)
   const [siap, setSiap] = useState(false)
   const [errorKamera, setErrorKamera] = useState('')
+  const [flashTersedia, setFlashTersedia] = useState(false)
+  const [flashNyala, setFlashNyala] = useState(false)
 
   useEffect(() => {
     let batal = false
@@ -256,6 +258,13 @@ function ModalKameraScan({ onAmbilFoto, onTutup, memproses, errorScan, progresOc
           await videoRef.current.play()
           setSiap(true)
         }
+
+        // Cek apakah track kamera mendukung flash/torch (umumnya Chrome Android)
+        const track = stream.getVideoTracks()[0]
+        const kapabilitas = track?.getCapabilities?.()
+        if (kapabilitas?.torch) {
+          setFlashTersedia(true)
+        }
       } catch (err) {
         setErrorKamera(
           err.name === 'NotAllowedError'
@@ -269,11 +278,27 @@ function ModalKameraScan({ onAmbilFoto, onTutup, memproses, errorScan, progresOc
 
     return () => {
       batal = true
+      const track = streamRef.current?.getVideoTracks()[0]
+      track?.applyConstraints?.({ advanced: [{ torch: false }] }).catch(() => {})
       streamRef.current?.getTracks().forEach((t) => t.stop())
     }
   }, [])
 
+  async function toggleFlash() {
+    const track = streamRef.current?.getVideoTracks()[0]
+    if (!track) return
+    try {
+      const nyalaBaru = !flashNyala
+      await track.applyConstraints({ advanced: [{ torch: nyalaBaru }] })
+      setFlashNyala(nyalaBaru)
+    } catch {
+      setErrorKamera('Gagal mengaktifkan flash pada kamera ini.')
+    }
+  }
+
   function tutupDanHentikan() {
+    const track = streamRef.current?.getVideoTracks()[0]
+    track?.applyConstraints?.({ advanced: [{ torch: false }] }).catch(() => {})
     streamRef.current?.getTracks().forEach((t) => t.stop())
     onTutup()
   }
@@ -300,6 +325,18 @@ function ModalKameraScan({ onAmbilFoto, onTutup, memproses, errorScan, progresOc
             )}
             {siap && (
               <div className="absolute inset-6 border-2 border-teal-400 rounded-lg pointer-events-none" />
+            )}
+            {flashTersedia && siap && (
+              <button
+                type="button"
+                onClick={toggleFlash}
+                className={`absolute top-2 right-2 w-9 h-9 rounded-full flex items-center justify-center text-base ${
+                  flashNyala ? 'bg-yellow-400 text-gray-900' : 'bg-black/50 text-white'
+                }`}
+                title={flashNyala ? 'Matikan flash' : 'Nyalakan flash'}
+              >
+                {flashNyala ? '⚡' : '🔦'}
+              </button>
             )}
           </div>
         )}
