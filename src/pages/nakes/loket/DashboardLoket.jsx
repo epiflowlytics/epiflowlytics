@@ -3,9 +3,6 @@ import { supabase } from '../../../lib/supabaseClient'
 import AntrianDisplay from './AntrianDisplay'
 import CekAntrian from './CekAntrian'
 import DatePickerLahir from './DatePickerLahir'
-import ScanIdentitas from './ScanIdentitas'
-import PopupHasilScan from './PopupHasilScan'
-import ScanBpjs from './ScanBpjs'
 
 /* ────────────────────────────────────────────────────────────────
    CATATAN SKEMA DATABASE YANG DIBUTUHKAN (silakan sesuaikan)
@@ -150,18 +147,6 @@ const OPSI_STATUS_KELUARGA = [
 function labelStatusKeluarga(value, teksLainnya) {
   if (value === 'lainnya') return teksLainnya || 'Lainnya'
   return OPSI_STATUS_KELUARGA.find((o) => o.value === value)?.label || ''
-}
-
-// Badge kecil "✓ dari scan" ditampilkan di sebelah label field yang baru
-// saja terisi otomatis dari hasil Scan Identitas / Scan BPJS, supaya
-// petugas tahu field mana yang sebaiknya dicek ulang alih-alih diketik manual.
-function BadgeDariScan({ field, fieldDariScan }) {
-  if (!fieldDariScan?.has(field)) return null
-  return (
-    <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-teal-50 text-teal-600 font-normal">
-      ✓ dari scan
-    </span>
-  )
 }
 
 const OPSI_PRIORITAS = [
@@ -732,13 +717,6 @@ export default function DashboardLoket() {
   // Popup validasi field wajib: { pesan, fokusKe } — fokusKe dijalankan
   // setelah tombol OK di popup diklik, supaya kursor langsung ke field yang dimaksud.
   const [popupValidasiPasienRak, setPopupValidasiPasienRak] = useState(null)
-  // Hasil "Scan Identitas" (KTP/KIA/KK) yang sedang menunggu konfirmasi petugas
-  const [hasilScanPasien, setHasilScanPasien] = useState(null)
-  // Set berisi nama field yang baru saja diisi otomatis dari hasil scan —
-  // dipakai untuk menampilkan badge "dari scan" di sebelah label, supaya
-  // petugas tahu field mana yang perlu dicek ulang (bukan diketik manual).
-  const [fieldDariScan, setFieldDariScan] = useState(new Set())
-  const [showScanBpjs, setShowScanBpjs] = useState(false)
 
   const formRef = useRef(null)
   const searchInputRef = useRef(null)
@@ -924,96 +902,6 @@ export default function DashboardLoket() {
     setAnggotaKkRak([])
     setPopupValidasiPasienRak(null)
     setPasienRakError('')
-    setFieldDariScan(new Set())
-    setShowScanBpjs(false)
-  }
-
-  // ── Handler untuk hasil "Scan Identitas" (ScanIdentitas.jsx + PopupHasilScan.jsx) ──
-
-  // Kasus: pasien baru (atau salah satu anggota KK yang belum terdaftar)
-  // -> isi form tambah pasien dari hasil OCR, petugas tetap bisa koreksi manual.
-  function isiFormDariHasilScan(hasilScan) {
-    setFormPasienRak((prev) => ({
-      ...prev,
-      no_nik: hasilScan.nik || prev.no_nik,
-      no_kk: hasilScan.no_kk || prev.no_kk,
-      nama_lengkap: hasilScan.nama_lengkap || prev.nama_lengkap,
-      tempat_lahir: hasilScan.tempat_lahir || prev.tempat_lahir,
-      tanggal_lahir: hasilScan.tanggal_lahir || prev.tanggal_lahir,
-      jenis_kelamin: hasilScan.jenis_kelamin || prev.jenis_kelamin,
-      alamat: hasilScan.alamat || prev.alamat,
-      pekerjaan: hasilScan.pekerjaan || prev.pekerjaan,
-      status_keluarga: hasilScan.status_keluarga_value || prev.status_keluarga,
-    }))
-    // Tandai field mana saja yang benar-benar terisi dari hasil scan (bukan
-    // field yang tetap kosong karena OCR tidak berhasil membacanya) supaya
-    // badge "dari scan" hanya muncul di field yang memang berubah.
-    const terisi = new Set()
-    ;['no_nik', 'no_kk', 'nama_lengkap', 'tempat_lahir', 'tanggal_lahir', 'jenis_kelamin', 'alamat', 'pekerjaan'].forEach(
-      (key) => {
-        const mapKey = key === 'no_nik' ? 'nik' : key === 'status_keluarga' ? 'status_keluarga_value' : key
-        if (hasilScan[mapKey]) terisi.add(key)
-      }
-    )
-    setFieldDariScan(terisi)
-    if (hasilScan.no_kk) cekNoKkRak(hasilScan.no_kk)
-    setHasilScanPasien(null)
-  }
-
-  // Hasil scan QR/barcode kartu BPJS/KIS -> isi langsung field no_bpjs
-  function isiNoBpjsDariScan(kodeBpjs) {
-    setFormPasienRak((prev) => ({ ...prev, no_bpjs: kodeBpjs }))
-    setFieldDariScan((prev) => new Set(prev).add('no_bpjs'))
-    setShowScanBpjs(false)
-  }
-
-  // Kasus: NIK hasil scan cocok dengan pasien yang sudah terdaftar
-  // -> buka langsung form dalam mode edit berisi data lama, tanpa isi ulang.
-  function gunakanDataPasienLama(pasienLama) {
-    setEditPasienRakId(pasienLama.id)
-    setFormPasienRak((prev) => ({
-      ...prev,
-      no_rekam_medis: pasienLama.no_rekam_medis || '',
-      rm_terkunci: true,
-      no_kk: pasienLama.no_kk || '',
-      urutan_kk: pasienLama.urutan_kk || '',
-      status_keluarga: pasienLama.status_keluarga || '',
-      status_keluarga_lainnya: pasienLama.status_keluarga_lainnya || '',
-      no_nik: pasienLama.no_nik || '',
-      no_bpjs: pasienLama.no_bpjs || '',
-      alamat: pasienLama.alamat || '',
-      nama_lengkap: pasienLama.nama_lengkap || '',
-      tempat_lahir: pasienLama.tempat_lahir || '',
-      tanggal_lahir: pasienLama.tanggal_lahir || '',
-      jenis_kelamin: pasienLama.jenis_kelamin || '',
-      pekerjaan: pasienLama.pekerjaan || '',
-    }))
-    setHasilScanPasien(null)
-  }
-
-  // Kasus: data lama ditemukan TAPI ada perbedaan dengan hasil scan barusan
-  // (mis. alamat pindah) -> isi form dengan data lama sebagai dasar, field
-  // yang berbeda ditimpa hasil scan terbaru. Petugas tetap review sebelum simpan.
-  function updateDariHasilScan(pasienLama, hasilScan) {
-    setEditPasienRakId(pasienLama.id)
-    setFormPasienRak((prev) => ({
-      ...prev,
-      no_rekam_medis: pasienLama.no_rekam_medis || '',
-      rm_terkunci: true,
-      no_kk: pasienLama.no_kk || '',
-      urutan_kk: pasienLama.urutan_kk || '',
-      status_keluarga: pasienLama.status_keluarga || '',
-      status_keluarga_lainnya: pasienLama.status_keluarga_lainnya || '',
-      no_nik: pasienLama.no_nik || '',
-      no_bpjs: pasienLama.no_bpjs || '',
-      alamat: hasilScan.alamat || pasienLama.alamat || '',
-      nama_lengkap: hasilScan.nama_lengkap || pasienLama.nama_lengkap || '',
-      tempat_lahir: hasilScan.tempat_lahir || pasienLama.tempat_lahir || '',
-      tanggal_lahir: hasilScan.tanggal_lahir || pasienLama.tanggal_lahir || '',
-      jenis_kelamin: hasilScan.jenis_kelamin || pasienLama.jenis_kelamin || '',
-      pekerjaan: hasilScan.pekerjaan || pasienLama.pekerjaan || '',
-    }))
-    setHasilScanPasien(null)
   }
 
   // Hapus pasien dari rak (hapus permanen dari database).
@@ -2211,17 +2099,6 @@ export default function DashboardLoket() {
         anggotaKkRak={anggotaKkRak}
         onCekNoKkRak={cekNoKkRak}
         cekKkRakLoading={cekKkRakLoading}
-        hasilScanPasien={hasilScanPasien}
-        onHasilScanBaru={setHasilScanPasien}
-        onTutupHasilScan={() => setHasilScanPasien(null)}
-        onGunakanDataPasienLama={gunakanDataPasienLama}
-        onIsiFormDariScan={isiFormDariHasilScan}
-        onUpdateDariScan={updateDariHasilScan}
-        fieldDariScan={fieldDariScan}
-        showScanBpjs={showScanBpjs}
-        onBukaScanBpjs={() => setShowScanBpjs(true)}
-        onTutupScanBpjs={() => setShowScanBpjs(false)}
-        onBpjsTerbaca={isiNoBpjsDariScan}
         refPasienRakNama={refPasienRakNama}
         refPasienRakNoRm={refPasienRakNoRm}
         refPasienRakNik={refPasienRakNik}
@@ -2894,17 +2771,6 @@ export default function DashboardLoket() {
         anggotaKkRak={anggotaKkRak}
         onCekNoKkRak={cekNoKkRak}
         cekKkRakLoading={cekKkRakLoading}
-        hasilScanPasien={hasilScanPasien}
-        onHasilScanBaru={setHasilScanPasien}
-        onTutupHasilScan={() => setHasilScanPasien(null)}
-        onGunakanDataPasienLama={gunakanDataPasienLama}
-        onIsiFormDariScan={isiFormDariHasilScan}
-        onUpdateDariScan={updateDariHasilScan}
-        fieldDariScan={fieldDariScan}
-        showScanBpjs={showScanBpjs}
-        onBukaScanBpjs={() => setShowScanBpjs(true)}
-        onTutupScanBpjs={() => setShowScanBpjs(false)}
-        onBpjsTerbaca={isiNoBpjsDariScan}
         refPasienRakNama={refPasienRakNama}
         refPasienRakNoRm={refPasienRakNoRm}
         refPasienRakNik={refPasienRakNik}
@@ -2953,17 +2819,6 @@ function ModalKelolaRak({
   anggotaKkRak,
   onCekNoKkRak,
   cekKkRakLoading,
-  hasilScanPasien,
-  onHasilScanBaru,
-  onTutupHasilScan,
-  onGunakanDataPasienLama,
-  onIsiFormDariScan,
-  onUpdateDariScan,
-  fieldDariScan,
-  showScanBpjs,
-  onBukaScanBpjs,
-  onTutupScanBpjs,
-  onBpjsTerbaca,
   refPasienRakNama,
   refPasienRakNoRm,
   refPasienRakNik,
@@ -3235,17 +3090,6 @@ function ModalKelolaRak({
         onEditPasienRak={onEditPasienRak}
         onHapusPasienRak={onHapusPasienRak}
         instansiId={instansiId}
-        hasilScanPasien={hasilScanPasien}
-        onHasilScanBaru={onHasilScanBaru}
-        onTutupHasilScan={onTutupHasilScan}
-        onGunakanDataPasienLama={onGunakanDataPasienLama}
-        onIsiFormDariScan={onIsiFormDariScan}
-        onUpdateDariScan={onUpdateDariScan}
-        fieldDariScan={fieldDariScan}
-        showScanBpjs={showScanBpjs}
-        onBukaScanBpjs={onBukaScanBpjs}
-        onTutupScanBpjs={onTutupScanBpjs}
-        onBpjsTerbaca={onBpjsTerbaca}
         refNama={refPasienRakNama}
         refNoRm={refPasienRakNoRm}
         refNik={refPasienRakNik}
@@ -3978,17 +3822,6 @@ function FormTambahPasienRak({
   onEditPasienRak,
   onHapusPasienRak,
   instansiId,
-  hasilScanPasien,
-  onHasilScanBaru,
-  onTutupHasilScan,
-  onGunakanDataPasienLama,
-  onIsiFormDariScan,
-  onUpdateDariScan,
-  fieldDariScan,
-  showScanBpjs,
-  onBukaScanBpjs,
-  onTutupScanBpjs,
-  onBpjsTerbaca,
   refNama,
   refNoRm,
   refNik,
@@ -4018,16 +3851,6 @@ function FormTambahPasienRak({
             <div className="bg-red-50 border border-red-200 text-red-600 rounded-lg px-3 py-2 text-xs">
               {error}
             </div>
-          )}
-
-          {/* Scan Identitas: KTP / KIA / KK lewat kamera HP, otomatis
-              mengisi field di bawah dan mendeteksi pasien lama via NIK. */}
-          {!editMode && (
-            <ScanIdentitas
-              instansiId={instansiId}
-              disabled={loading}
-              onHasilBaru={onHasilScanBaru}
-            />
           )}
 
           {/* 3. Nomor KK */}
@@ -4245,7 +4068,6 @@ function FormTambahPasienRak({
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">
               Nama Pasien <span className="text-red-500">*</span>
-              <BadgeDariScan field="nama_lengkap" fieldDariScan={fieldDariScan} />
             </label>
             <input
               type="text"
@@ -4262,7 +4084,6 @@ function FormTambahPasienRak({
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">
               Nomor Kartu Tanda Penduduk (KTP) <span className="text-red-500">*</span>
-              <BadgeDariScan field="no_nik" fieldDariScan={fieldDariScan} />
             </label>
             <input
               type="text"
@@ -4282,7 +4103,6 @@ function FormTambahPasienRak({
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Tempat Lahir
-                <BadgeDariScan field="tempat_lahir" fieldDariScan={fieldDariScan} />
               </label>
               <input
                 type="text"
@@ -4297,7 +4117,6 @@ function FormTambahPasienRak({
             <div ref={refTanggalLahir} tabIndex={-1}>
               <label className="block text-xs font-medium text-gray-600 mb-1">
                 Tanggal Lahir <span className="text-red-500">*</span>
-                <BadgeDariScan field="tanggal_lahir" fieldDariScan={fieldDariScan} />
               </label>
               <DatePickerLahir
                 name="tanggal_lahir"
@@ -4314,7 +4133,6 @@ function FormTambahPasienRak({
           <div ref={refJenisKelamin} tabIndex={-1}>
             <label className="block text-xs font-medium text-gray-600 mb-1">
               Jenis Kelamin <span className="text-red-500">*</span>
-              <BadgeDariScan field="jenis_kelamin" fieldDariScan={fieldDariScan} />
             </label>
             <select
               name="jenis_kelamin"
@@ -4332,7 +4150,6 @@ function FormTambahPasienRak({
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">
               Pekerjaan
-              <BadgeDariScan field="pekerjaan" fieldDariScan={fieldDariScan} />
             </label>
             <input
               type="text"
@@ -4349,35 +4166,21 @@ function FormTambahPasienRak({
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">
               Nomor BPJS
-              <BadgeDariScan field="no_bpjs" fieldDariScan={fieldDariScan} />
             </label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                name="no_bpjs"
-                autoComplete="off"
-                value={form.no_bpjs}
-                onChange={onChange}
-                className="flex-1 border rounded-lg px-3 py-2 text-sm"
-              />
-              {onBukaScanBpjs && (
-                <button
-                  type="button"
-                  onClick={onBukaScanBpjs}
-                  title="Scan QR kartu BPJS/KIS lewat kamera"
-                  className="text-xs px-3 py-2 rounded-lg border border-teal-300 text-teal-700 hover:bg-teal-50 shrink-0"
-                >
-                  📷 Scan
-                </button>
-              )}
-            </div>
+            <input
+              type="text"
+              name="no_bpjs"
+              autoComplete="off"
+              value={form.no_bpjs}
+              onChange={onChange}
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+            />
           </div>
 
           {/* 6. Alamat Pasien */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1">
               Alamat Pasien
-              <BadgeDariScan field="alamat" fieldDariScan={fieldDariScan} />
             </label>
             <textarea
               name="alamat"
@@ -4434,20 +4237,6 @@ function FormTambahPasienRak({
             </button>
           </div>
         </div>
-      )}
-
-      {/* Popup hasil Scan Identitas: cabang pasien lama / pasien baru / kartu KK */}
-      <PopupHasilScan
-        data={hasilScanPasien}
-        onGunakanDataLama={onGunakanDataPasienLama}
-        onIsiFormBaru={onIsiFormDariScan}
-        onUpdateDariScan={onUpdateDariScan}
-        onTutup={onTutupHasilScan}
-      />
-
-      {/* Modal kamera live untuk scan QR/barcode kartu BPJS/KIS */}
-      {showScanBpjs && (
-        <ScanBpjs onTerbaca={onBpjsTerbaca} onTutup={onTutupScanBpjs} />
       )}
     </div>
   )
