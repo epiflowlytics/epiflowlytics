@@ -14,9 +14,23 @@ import { supabase } from '../../../lib/supabaseClient'
    OCR dilakukan 100% LOKAL di browser petugas via Tesseract.js —
    foto KTP/KK TIDAK PERNAH dikirim ke server/API pihak ketiga mana
    pun. Ini sengaja dipilih demi privasi data pasien (NIK, alamat,
-   dll adalah data sensitif). Konsekuensinya: akurasi lebih rendah
-   dari OCR berbasis AI vision, jadi parsing di bawah dibuat cukup
-   toleran + petugas WAJIB mengecek ulang hasilnya sebelum simpan.
+   dll adalah data sensitif).
+
+   KARENA akurasi Tesseract.js jauh di bawah OCR berbasis AI vision
+   (terutama utk deretan angka NIK 16 digit), komponen ini TIDAK
+   langsung memanggil onHasilBaru setelah OCR selesai. Alurnya:
+
+     1. Kamera ambil foto -> OCR jalan -> hasil di-parse
+     2. Muncul MODAL KONFIRMASI wajib: NIK & field lain ditampilkan
+        dalam input yang BISA DIEDIT petugas
+     3. Petugas WAJIB menekan "Konfirmasi & Gunakan" (atau "Scan
+        Ulang" kalau hasilnya terlalu kacau) sebelum data diteruskan
+     4. Baru setelah konfirmasi, onHasilBaru dipanggil dengan data
+        yang SUDAH divalidasi mata petugas
+
+   Ini FLOW WAJIB, bukan opsional — cek NIK ke database pasien lama
+   (cekPasienByNik) juga baru dijalankan SETELAH konfirmasi, supaya
+   tidak mencari NIK yang salah baca dari OCR.
 
    Cara pakai di form pendaftaran:
 
@@ -25,16 +39,11 @@ import { supabase } from '../../../lib/supabaseClient'
      <ScanIdentitas
        instansiId={profile.instansi_id}
        onHasilBaru={(data) => {
-         // data.pasienLama -> baris pasien dari tabel `pasien` kalau NIK cocok
-         // data.hasilScan  -> hasil OCR lokal {nik, nama_lengkap, ...}
-         //   - data.hasilScan._peringatan   -> ada isinya kalau NIK/no_kk
-         //     tidak terbaca lengkap 16 digit. Tampilkan supaya petugas
-         //     tahu harus mengecek/mengetik manual field itu.
-         //   - data.hasilScan._teks_mentah_ocr -> teks mentah hasil OCR,
-         //     berguna untuk debug kalau parsing regex meleset.
-         // isi form kamu di sini, atau tampilkan popup konfirmasi.
-         // KARENA OCR LOKAL AKURASINYA LEBIH RENDAH DARI AI VISION,
-         // SELALU MINTA PETUGAS MENGECEK ULANG HASILNYA SEBELUM SIMPAN.
+         // data.pasienLama -> baris pasien dari tabel `pasien` kalau NIK
+         //   (yang SUDAH dikonfirmasi petugas) cocok dengan data lama
+         // data.hasilScan  -> hasil OCR yang SUDAH dikonfirmasi/diedit
+         //   petugas lewat modal konfirmasi, bukan hasil OCR mentah
+         // isi form kamu di sini, atau tampilkan popup konfirmasi lanjutan.
        }}
      />
 
@@ -374,11 +383,161 @@ function ModalKameraScan({ onAmbilFoto, onTutup, memproses, errorScan, progresOc
   )
 }
 
+// ─── Modal konfirmasi hasil scan: WAJIB dilewati sebelum data dipakai ──
+// Menampilkan field hasil OCR dalam bentuk input yang bisa diedit,
+// supaya petugas mengoreksi kesalahan baca OCR (terutama NIK) sebelum
+// data dipakai untuk cari/simpan pasien.
+function ModalKonfirmasiHasil({ hasilAwal, onKonfirmasi, onScanUlang }) {
+  const [form, setForm] = useState(() => ({
+    jenis_kartu: hasilAwal.jenis_kartu,
+    nik: hasilAwal.nik || '',
+    no_kk: hasilAwal.no_kk || '',
+    nama_lengkap: hasilAwal.nama_lengkap || '',
+    tempat_lahir: hasilAwal.tempat_lahir || '',
+    tanggal_lahir: hasilAwal.tanggal_lahir || '',
+    jenis_kelamin: hasilAwal.jenis_kelamin || '',
+    alamat: hasilAwal.alamat || '',
+    pekerjaan: hasilAwal.pekerjaan || '',
+  }))
+
+  const nomorUtamaKey = form.jenis_kartu === 'kk' ? 'no_kk' : 'nik'
+  const nomorUtamaLabel = form.jenis_kartu === 'kk' ? 'Nomor KK' : 'NIK'
+  const nomorUtamaValue = form[nomorUtamaKey]
+  const nomorUtamaValid = /^\d{16}$/.test(nomorUtamaValue)
+
+  function updateField(key, value) {
+    setForm((f) => ({ ...f, [key]: value }))
+  }
+
+  function handleKonfirmasi() {
+    if (!nomorUtamaValid) return // tombol seharusnya sudah disabled, ini jaga-jaga
+    onKonfirmasi({ ...hasilAwal, ...form })
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[90] p-4">
+      <div className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-5 max-h-[90vh] overflow-y-auto">
+        <p className="font-semibold text-gray-800 mb-1">✅ Konfirmasi Hasil Scan</p>
+        <p className="text-xs text-gray-500 mb-3">
+          Hasil pembacaan otomatis (OCR lokal) BISA SALAH, terutama pada angka. Cek dan koreksi field di bawah
+          sebelum melanjutkan.
+        </p>
+
+        <div className="space-y-3 mb-4">
+          <div>
+            <label className="text-xs font-semibold text-gray-600">{nomorUtamaLabel} *</label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={16}
+              value={nomorUtamaValue}
+              onChange={(e) => updateField(nomorUtamaKey, e.target.value.replace(/\D/g, ''))}
+              className={`w-full mt-1 px-3 py-2 rounded-lg border text-base font-mono tracking-wider ${
+                nomorUtamaValid ? 'border-gray-300' : 'border-red-400 bg-red-50'
+              }`}
+              placeholder="16 digit angka"
+            />
+            {!nomorUtamaValid && (
+              <p className="text-xs text-red-600 mt-1">
+                ⚠️ Harus persis 16 digit angka. Cocokkan langsung dengan kartu fisik ({nomorUtamaValue.length}/16
+                digit terisi).
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-600">Nama Lengkap</label>
+            <input
+              type="text"
+              value={form.nama_lengkap}
+              onChange={(e) => updateField('nama_lengkap', e.target.value)}
+              className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-300 text-sm"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs font-semibold text-gray-600">Tempat Lahir</label>
+              <input
+                type="text"
+                value={form.tempat_lahir}
+                onChange={(e) => updateField('tempat_lahir', e.target.value)}
+                className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-300 text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-gray-600">Tanggal Lahir</label>
+              <input
+                type="date"
+                value={form.tanggal_lahir}
+                onChange={(e) => updateField('tanggal_lahir', e.target.value)}
+                className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-300 text-sm"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-600">Jenis Kelamin</label>
+            <select
+              value={form.jenis_kelamin}
+              onChange={(e) => updateField('jenis_kelamin', e.target.value)}
+              className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-300 text-sm bg-white"
+            >
+              <option value="">— Pilih —</option>
+              <option value="L">Laki-laki</option>
+              <option value="P">Perempuan</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-600">Alamat</label>
+            <textarea
+              value={form.alamat}
+              onChange={(e) => updateField('alamat', e.target.value)}
+              rows={2}
+              className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-300 text-sm"
+            />
+          </div>
+
+          <div>
+            <label className="text-xs font-semibold text-gray-600">Pekerjaan</label>
+            <input
+              type="text"
+              value={form.pekerjaan}
+              onChange={(e) => updateField('pekerjaan', e.target.value)}
+              className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-300 text-sm"
+            />
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onScanUlang}
+            className="flex-1 py-2 rounded-lg border border-gray-300 text-gray-600 text-sm font-semibold"
+          >
+            🔄 Scan Ulang
+          </button>
+          <button
+            type="button"
+            onClick={handleKonfirmasi}
+            disabled={!nomorUtamaValid}
+            className="flex-1 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Konfirmasi & Gunakan
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ScanIdentitas({ instansiId, onHasilBaru, disabled }) {
   const [showKamera, setShowKamera] = useState(false)
   const [loading, setLoading] = useState(false)
   const [errorScan, setErrorScan] = useState('')
   const [progresOcr, setProgresOcr] = useState(0)
+  const [hasilMenungguKonfirmasi, setHasilMenungguKonfirmasi] = useState(null)
 
   async function handleAmbilFoto(videoEl) {
     if (!videoEl) return
@@ -403,20 +562,37 @@ export default function ScanIdentitas({ instansiId, onHasilBaru, disabled }) {
         }))
       }
 
-      // Cek pasien lama berdasarkan NIK hasil scan (khusus KTP/KIA)
-      let pasienLama = null
-      if (hasilScan.jenis_kartu === 'ktp' || hasilScan.jenis_kartu === 'kia') {
-        pasienLama = await cekPasienByNik(instansiId, hasilScan.nik)
-      }
-
+      // JANGAN langsung panggil onHasilBaru atau cek NIK ke database di
+      // sini — hasil OCR mentah TIDAK BOLEH dipercaya begitu saja (lihat
+      // catatan akurasi Tesseract.js di atas). Tutup kamera, buka modal
+      // konfirmasi dulu; cek NIK & onHasilBaru baru jalan setelah
+      // petugas mengonfirmasi/mengoreksi field-nya.
       setShowKamera(false)
-      onHasilBaru?.({ hasilScan, pasienLama })
+      setHasilMenungguKonfirmasi(hasilScan)
     } catch (err) {
       setErrorScan(err.message || 'Gagal memproses foto kartu')
     } finally {
       setLoading(false)
       setProgresOcr(0)
     }
+  }
+
+  async function handleKonfirmasiHasil(hasilTerkonfirmasi) {
+    setHasilMenungguKonfirmasi(null)
+
+    // Cek pasien lama baru dijalankan SEKARANG, pakai NIK yang sudah
+    // dikoreksi/dikonfirmasi petugas — bukan NIK mentah hasil OCR.
+    let pasienLama = null
+    if (hasilTerkonfirmasi.jenis_kartu === 'ktp' || hasilTerkonfirmasi.jenis_kartu === 'kia') {
+      pasienLama = await cekPasienByNik(instansiId, hasilTerkonfirmasi.nik)
+    }
+
+    onHasilBaru?.({ hasilScan: hasilTerkonfirmasi, pasienLama })
+  }
+
+  function handleScanUlang() {
+    setHasilMenungguKonfirmasi(null)
+    setShowKamera(true)
   }
 
   return (
@@ -440,6 +616,14 @@ export default function ScanIdentitas({ instansiId, onHasilBaru, disabled }) {
           memproses={loading}
           errorScan={errorScan}
           progresOcr={progresOcr}
+        />
+      )}
+
+      {hasilMenungguKonfirmasi && (
+        <ModalKonfirmasiHasil
+          hasilAwal={hasilMenungguKonfirmasi}
+          onKonfirmasi={handleKonfirmasiHasil}
+          onScanUlang={handleScanUlang}
         />
       )}
     </div>
