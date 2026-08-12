@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createWorker } from 'tesseract.js'
 import { supabase } from '../../../lib/supabaseClient'
 
 /* ────────────────────────────────────────────────────────────────
@@ -10,6 +11,13 @@ import { supabase } from '../../../lib/supabaseClient'
    input file hanya bekerja di browser mobile — di desktop browser
    selalu fallback ke file picker biasa, makanya diganti ke sini.
 
+   OCR dilakukan 100% LOKAL di browser petugas via Tesseract.js —
+   foto KTP/KK TIDAK PERNAH dikirim ke server/API pihak ketiga mana
+   pun. Ini sengaja dipilih demi privasi data pasien (NIK, alamat,
+   dll adalah data sensitif). Konsekuensinya: akurasi lebih rendah
+   dari OCR berbasis AI vision, jadi parsing di bawah dibuat cukup
+   toleran + petugas WAJIB mengecek ulang hasilnya sebelum simpan.
+
    Cara pakai di form pendaftaran:
 
      import ScanIdentitas from './ScanIdentitas'
@@ -18,8 +26,15 @@ import { supabase } from '../../../lib/supabaseClient'
        instansiId={profile.instansi_id}
        onHasilBaru={(data) => {
          // data.pasienLama -> baris pasien dari tabel `pasien` kalau NIK cocok
-         // data.hasilScan  -> hasil OCR mentah {nik, nama_lengkap, ...}
-         // isi form kamu di sini, atau tampilkan popup konfirmasi
+         // data.hasilScan  -> hasil OCR lokal {nik, nama_lengkap, ...}
+         //   - data.hasilScan._peringatan   -> ada isinya kalau NIK/no_kk
+         //     tidak terbaca lengkap 16 digit. Tampilkan supaya petugas
+         //     tahu harus mengecek/mengetik manual field itu.
+         //   - data.hasilScan._teks_mentah_ocr -> teks mentah hasil OCR,
+         //     berguna untuk debug kalau parsing regex meleset.
+         // isi form kamu di sini, atau tampilkan popup konfirmasi.
+         // KARENA OCR LOKAL AKURASINYA LEBIH RENDAH DARI AI VISION,
+         // SELALU MINTA PETUGAS MENGECEK ULANG HASILNYA SEBELUM SIMPAN.
        }}
      />
 
@@ -27,25 +42,12 @@ import { supabase } from '../../../lib/supabaseClient'
    di tabel `pasien` (no_nik, nama_lengkap, tanggal_lahir, dst).
    ──────────────────────────────────────────────────────────────── */
 
-const PROMPT_OCR_KARTU = `Anda membaca foto kartu identitas Indonesia (KTP, KIA/Kartu Identitas Anak, atau Kartu Keluarga).
-Tentukan sendiri jenis kartunya dari judul/layout, lalu ekstrak field yang tercetak di kartu tersebut.
-
-Balas HANYA dengan JSON valid, tanpa teks lain, tanpa markdown, format persis seperti ini:
-{
-  "jenis_kartu": "ktp" | "kia" | "kk" | "tidak_dikenali",
-  "nik": string atau null (16 digit, khusus untuk KTP/KIA; untuk KK pakai field no_kk),
-  "no_kk": string atau null (16 digit, hanya ada di kartu KK atau di bawah NIK pada KTP),
-  "nama_lengkap": string atau null (untuk KK: nama Kepala Keluarga),
-  "tempat_lahir": string atau null,
-  "tanggal_lahir": string atau null (format YYYY-MM-DD),
-  "jenis_kelamin": "L" | "P" | null,
-  "alamat": string atau null,
-  "pekerjaan": string atau null,
-  "anggota_kk": array of {"nama_lengkap": string, "nik": string, "status_keluarga": string} atau null (isi hanya jika jenis_kartu = "kk")
+// Baris label yang sering muncul di KTP/KK, dipakai buat membersihkan
+// noise umum hasil OCR (mis. "NIK :" ikut terbaca sebelum nomornya)
+const BULAN_ID = {
+  jan: '01', feb: '02', mar: '03', apr: '04', mei: '05', jun: '06',
+  jul: '07', agu: '08', sep: '09', okt: '10', nov: '11', des: '12',
 }
-
-Jika tulisan buram/tidak terbaca untuk suatu field, isi null untuk field itu saja, jangan mengarang data.
-Jika gambar bukan kartu identitas, balas {"jenis_kartu": "tidak_dikenali"} dan field lain null.`
 
 function mapStatusKeluargaKeValue(teks) {
   if (!teks) return ''
@@ -70,43 +72,146 @@ function ambilFrameKeBase64(videoEl) {
   return dataUrl.split(',')[1]
 }
 
-async function bacaKartuDenganAI(base64Data, mediaType) {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1000,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64Data } },
-            { type: 'text', text: PROMPT_OCR_KARTU },
-          ],
-        },
-      ],
-    }),
-  })
-
-  if (!response.ok) throw new Error(`Gagal menghubungi layanan pembaca kartu (status ${response.status})`)
-
-  const data = await response.json()
-  const teks = (data.content || [])
-    .filter((c) => c.type === 'text')
-    .map((c) => c.text)
-    .join('')
-    .trim()
-    .replace(/^```json\s*/i, '')
-    .replace(/```$/i, '')
-    .trim()
-
-  let hasil
-  try {
-    hasil = JSON.parse(teks)
-  } catch {
-    throw new Error('Hasil pembacaan kartu tidak valid, coba foto ulang dengan pencahayaan lebih terang')
+// ─── Worker Tesseract dibuat sekali & dipakai ulang (hemat waktu init) ──
+let workerPromise = null
+function getWorker(onProgress) {
+  if (!workerPromise) {
+    workerPromise = createWorker('ind', 1, {
+      logger: (m) => {
+        if (m.status === 'recognizing text' && onProgress) {
+          onProgress(Math.round((m.progress || 0) * 100))
+        }
+      },
+    })
   }
+  return workerPromise
+}
+
+function bersihkanBaris(teks) {
+  return teks
+    .split('\n')
+    .map((b) => b.trim())
+    .filter(Boolean)
+}
+
+function cariNilaiSetelahLabel(baris, labelRegex) {
+  for (const b of baris) {
+    const m = b.match(labelRegex)
+    if (m && m[1]) return m[1].trim().replace(/^[:.\s]+/, '')
+  }
+  return null
+}
+
+// Ambil urutan 16 digit angka (mentolerir spasi di antara digit, umum
+// terjadi pada hasil OCR NIK)
+function cariAngka16Digit(teksGabung) {
+  const bersih = teksGabung.replace(/[^0-9\n]/g, (c) => (c === '\n' ? '\n' : ' '))
+  const m = bersih.match(/\d(?:\s?\d){15}/)
+  return m ? m[0].replace(/\s/g, '') : null
+}
+
+function parseTanggalLahir(teks) {
+  // Format umum di KTP: 17-08-1998 atau 17 08 1998
+  const m = teks.match(/(\d{1,2})[\s\-/](\d{1,2})[\s\-/](\d{4})/)
+  if (m) {
+    const [, dd, mm, yyyy] = m
+    return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
+  }
+  // Format alternatif: 17 Agustus 1998
+  const m2 = teks.match(/(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/)
+  if (m2) {
+    const [, dd, bulanTeks, yyyy] = m2
+    const kunci = bulanTeks.toLowerCase().slice(0, 3)
+    const mm = BULAN_ID[kunci]
+    if (mm) return `${yyyy}-${mm}-${dd.padStart(2, '0')}`
+  }
+  return null
+}
+
+function tentukanJenisKartu(teksGabung) {
+  const t = teksGabung.toUpperCase()
+  if (t.includes('KARTU KELUARGA')) return 'kk'
+  if (t.includes('IDENTITAS ANAK') || t.includes('KARTU IDENTITAS ANAK')) return 'kia'
+  if (t.includes('NIK') || t.includes('PROVINSI') || t.includes('KEWARGANEGARAAN')) return 'ktp'
+  return 'tidak_dikenali'
+}
+
+function parseHasilOcr(teksMentah) {
+  const baris = bersihkanBaris(teksMentah)
+  const teksGabung = baris.join('\n')
+  const jenisKartu = tentukanJenisKartu(teksGabung)
+
+  if (jenisKartu === 'tidak_dikenali') {
+    return { jenis_kartu: 'tidak_dikenali' }
+  }
+
+  const nikAtauKk = cariAngka16Digit(teksGabung)
+
+  const namaMentah =
+    cariNilaiSetelahLabel(baris, /nama\s*(?:lengkap)?\s*[:\.]?\s*(.+)/i) ||
+    cariNilaiSetelahLabel(baris, /kepala\s*keluarga\s*[:\.]?\s*(.+)/i)
+
+  const tempatTanggalLahir = cariNilaiSetelahLabel(
+    baris,
+    /tempat\s*(?:\/?\s*tgl)?\s*lahir\s*[:\.]?\s*(.+)/i
+  )
+
+  let tempatLahir = null
+  let tanggalLahir = null
+  if (tempatTanggalLahir) {
+    tanggalLahir = parseTanggalLahir(tempatTanggalLahir)
+    // Bagian sebelum koma/tanggal biasanya nama tempat lahir
+    const bagianTempat = tempatTanggalLahir.split(/[,]|\d{1,2}[\s\-/]/)[0]
+    tempatLahir = bagianTempat ? bagianTempat.trim().replace(/[:.\-]+$/, '') || null : null
+  }
+  if (!tanggalLahir) {
+    tanggalLahir = parseTanggalLahir(teksGabung)
+  }
+
+  let jenisKelamin = null
+  if (/\bLAKI[\s-]?LAKI\b/i.test(teksGabung)) jenisKelamin = 'L'
+  else if (/\bPEREMPUAN\b/i.test(teksGabung)) jenisKelamin = 'P'
+
+  const alamat = cariNilaiSetelahLabel(baris, /alamat\s*[:\.]?\s*(.+)/i)
+  const pekerjaan = cariNilaiSetelahLabel(baris, /pekerjaan\s*[:\.]?\s*(.+)/i)
+
+  const hasil = {
+    jenis_kartu: jenisKartu,
+    nik: jenisKartu !== 'kk' ? nikAtauKk : null,
+    no_kk: jenisKartu === 'kk' ? nikAtauKk : null,
+    nama_lengkap: namaMentah || null,
+    tempat_lahir: tempatLahir,
+    tanggal_lahir: tanggalLahir,
+    jenis_kelamin: jenisKelamin,
+    alamat: alamat || null,
+    pekerjaan: pekerjaan || null,
+    anggota_kk: null,
+    // teks mentah disertakan supaya petugas bisa cek manual kalau parsing meleset
+    _teks_mentah_ocr: teksGabung,
+  }
+
+  return hasil
+}
+
+async function bacaKartuDenganOcrLokal(base64Data, onProgress) {
+  const worker = await getWorker(onProgress)
+  const {
+    data: { text },
+  } = await worker.recognize(`data:image/jpeg;base64,${base64Data}`)
+
+  if (!text || !text.trim()) {
+    throw new Error('Tidak ada tulisan yang terbaca. Pastikan kartu rata, tidak buram, dan cahaya cukup.')
+  }
+
+  const hasil = parseHasilOcr(text)
+
+  // NIK/no_kk wajib 16 digit — kalau parsing gagal dapatkan itu, anggap
+  // hasil terlalu lemah untuk dipakai otomatis
+  const nomorUtama = hasil.jenis_kartu === 'kk' ? hasil.no_kk : hasil.nik
+  if (!nomorUtama || nomorUtama.length !== 16) {
+    hasil._peringatan = 'Nomor NIK/KK tidak terbaca penuh (16 digit). Mohon cek dan lengkapi manual.'
+  }
+
   return hasil
 }
 
@@ -127,7 +232,7 @@ async function cekPasienByNik(instansiId, nik) {
 }
 
 // ─── Modal kamera live: tampil setelah tombol utama diklik ─────────
-function ModalKameraScan({ onAmbilFoto, onTutup, memproses, errorScan }) {
+function ModalKameraScan({ onAmbilFoto, onTutup, memproses, errorScan, progresOcr }) {
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const [siap, setSiap] = useState(false)
@@ -220,7 +325,11 @@ function ModalKameraScan({ onAmbilFoto, onTutup, memproses, errorScan }) {
             disabled={!siap || memproses || !!errorKamera}
             className="flex-1 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold disabled:opacity-50"
           >
-            {memproses ? '⏳ Membaca...' : 'Ambil Foto'}
+            {memproses
+              ? progresOcr > 0
+                ? `⏳ Membaca... ${progresOcr}%`
+                : '⏳ Membaca...'
+              : 'Ambil Foto'}
           </button>
         </div>
       </div>
@@ -232,14 +341,16 @@ export default function ScanIdentitas({ instansiId, onHasilBaru, disabled }) {
   const [showKamera, setShowKamera] = useState(false)
   const [loading, setLoading] = useState(false)
   const [errorScan, setErrorScan] = useState('')
+  const [progresOcr, setProgresOcr] = useState(0)
 
   async function handleAmbilFoto(videoEl) {
     if (!videoEl) return
     setErrorScan('')
+    setProgresOcr(0)
     setLoading(true)
     try {
       const base64 = ambilFrameKeBase64(videoEl)
-      const hasilScan = await bacaKartuDenganAI(base64, 'image/jpeg')
+      const hasilScan = await bacaKartuDenganOcrLokal(base64, setProgresOcr)
 
       if (!hasilScan || hasilScan.jenis_kartu === 'tidak_dikenali') {
         setErrorScan('Kartu tidak terbaca. Pastikan foto jelas, tidak buram, dan pencahayaan cukup, lalu coba lagi.')
@@ -267,6 +378,7 @@ export default function ScanIdentitas({ instansiId, onHasilBaru, disabled }) {
       setErrorScan(err.message || 'Gagal memproses foto kartu')
     } finally {
       setLoading(false)
+      setProgresOcr(0)
     }
   }
 
@@ -290,6 +402,7 @@ export default function ScanIdentitas({ instansiId, onHasilBaru, disabled }) {
           }}
           memproses={loading}
           errorScan={errorScan}
+          progresOcr={progresOcr}
         />
       )}
     </div>
