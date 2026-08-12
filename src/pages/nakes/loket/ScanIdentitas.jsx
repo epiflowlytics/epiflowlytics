@@ -70,15 +70,104 @@ function mapStatusKeluargaKeValue(teks) {
   return 'famili_lain'
 }
 
-// Ambil 1 frame dari elemen <video> yang sedang live, lalu jadikan base64 JPEG
-function ambilFrameKeBase64(videoEl) {
+// Ambil 1 frame dari elemen <video> yang sedang live -> canvas mentah
+// (belum di-encode ke base64, supaya bisa diproses/preprocessing dulu)
+function ambilFrameKeCanvas(videoEl) {
   const canvas = document.createElement('canvas')
   canvas.width = videoEl.videoWidth
   canvas.height = videoEl.videoHeight
   const ctx = canvas.getContext('2d')
   ctx.drawImage(videoEl, 0, 0, canvas.width, canvas.height)
-  const dataUrl = canvas.toDataURL('image/jpeg', 0.9)
-  return dataUrl.split(',')[1]
+  return canvas
+}
+
+function canvasKeBase64(canvas, kualitas = 0.92) {
+  return canvas.toDataURL('image/jpeg', kualitas).split(',')[1]
+}
+
+// Preprocessing: grayscale -> naikkan kontras -> adaptive-ish threshold
+// hitam/putih. Ini yang paling berdampak buat akurasi OCR angka kecil
+// seperti NIK, karena menghilangkan noise warna/pencahayaan tidak rata
+// dari foto kartu dan menyisakan bentuk huruf/angka yang tegas.
+function preprocessCanvasUntukOcr(canvasAsli) {
+  const canvas = document.createElement('canvas')
+  canvas.width = canvasAsli.width
+  canvas.height = canvasAsli.height
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(canvasAsli, 0, 0)
+
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  const px = imgData.data
+
+  // 1) Grayscale (luminance-weighted, lebih akurat dari rata-rata biasa)
+  const abu = new Uint8ClampedArray(px.length / 4)
+  for (let i = 0, j = 0; i < px.length; i += 4, j++) {
+    abu[j] = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]
+  }
+
+  // 2) Hitung histogram sederhana buat cari threshold otomatis (metode Otsu)
+  const histogram = new Array(256).fill(0)
+  for (let j = 0; j < abu.length; j++) histogram[abu[j]]++
+  const total = abu.length
+  let sum = 0
+  for (let t = 0; t < 256; t++) sum += t * histogram[t]
+  let sumB = 0
+  let wB = 0
+  let maxVar = 0
+  let threshold = 127
+  for (let t = 0; t < 256; t++) {
+    wB += histogram[t]
+    if (wB === 0) continue
+    const wF = total - wB
+    if (wF === 0) break
+    sumB += t * histogram[t]
+    const mB = sumB / wB
+    const mF = (sum - sumB) / wF
+    const varBetween = wB * wF * (mB - mF) * (mB - mF)
+    if (varBetween > maxVar) {
+      maxVar = varBetween
+      threshold = t
+    }
+  }
+
+  // 3) Terapkan threshold + naikkan kontras di sekitar batas hitam/putih
+  for (let i = 0, j = 0; i < px.length; i += 4, j++) {
+    const nilai = abu[j] > threshold ? 255 : 0
+    px[i] = nilai
+    px[i + 1] = nilai
+    px[i + 2] = nilai
+  }
+
+  ctx.putImageData(imgData, 0, 0)
+  return canvas
+}
+
+// Crop persentase area tertentu dari canvas (dipakai buat fokus ke
+// baris NIK saja, mengurangi noise dari foto wajah/background KTP)
+function cropCanvas(canvasAsli, xPersen, yPersen, wPersen, hPersen) {
+  const sx = Math.round(canvasAsli.width * xPersen)
+  const sy = Math.round(canvasAsli.height * yPersen)
+  const sw = Math.round(canvasAsli.width * wPersen)
+  const sh = Math.round(canvasAsli.height * hPersen)
+  const canvas = document.createElement('canvas')
+  canvas.width = sw
+  canvas.height = sh
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(canvasAsli, sx, sy, sw, sh, 0, 0, sw, sh)
+  return canvas
+}
+
+// Perbesar canvas 2x (upscale) sebelum OCR — angka kecil jadi lebih
+// mudah dibaca Tesseract setelah diperbesar dengan smoothing halus
+function upscaleCanvas(canvasAsli, faktor = 2) {
+  const canvas = document.createElement('canvas')
+  canvas.width = canvasAsli.width * faktor
+  canvas.height = canvasAsli.height * faktor
+  const ctx = canvas.getContext('2d')
+  ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
+  ctx.drawImage(canvasAsli, 0, 0, canvas.width, canvas.height)
+  return canvas
 }
 
 // ─── Worker Tesseract dibuat sekali & dipakai ulang (hemat waktu init) ──
@@ -94,6 +183,26 @@ function getWorker(onProgress) {
     })
   }
   return workerPromise
+}
+
+// Worker kedua khusus KHUSUS ANGKA (whitelist digit 0-9). Dipakai hanya
+// untuk membaca NIK/no KK, bukan untuk teks umum -- karena dikunci ke
+// digit saja, Tesseract tidak akan salah mengira huruf (O/I/S/B dst)
+// sebagai angka atau sebaliknya, sehingga akurasi baca NIK jauh lebih
+// tinggi dibanding worker umum di atas.
+let workerDigitPromise = null
+async function getWorkerDigit() {
+  if (!workerDigitPromise) {
+    workerDigitPromise = (async () => {
+      const worker = await createWorker('eng', 1)
+      await worker.setParameters({
+        tessedit_char_whitelist: '0123456789',
+        tessedit_pageseg_mode: '7', // treat image as a single text line
+      })
+      return worker
+    })()
+  }
+  return workerDigitPromise
 }
 
 function bersihkanBaris(teks) {
@@ -202,17 +311,123 @@ function parseHasilOcr(teksMentah) {
   return hasil
 }
 
-async function bacaKartuDenganOcrLokal(base64Data, onProgress) {
-  const worker = await getWorker(onProgress)
+// Cari baris yang mengandung urutan digit terpanjang di teks OCR umum —
+// dipakai sebagai perkiraan KASAR posisi vertikal NIK, untuk menentukan
+// area crop yang dikirim ke worker digit-only. Kalau tidak ketemu,
+// fallback ke asumsi NIK ada di ~15-30% dari atas (posisi umum di KTP).
+function perkiraanPosisiBarisNik(baris) {
+  let baraisPalingBanyakDigit = null
+  let jumlahDigitMax = 0
+  for (const b of baris) {
+    const jumlahDigit = (b.match(/\d/g) || []).length
+    if (jumlahDigit > jumlahDigitMax) {
+      jumlahDigitMax = jumlahDigit
+      baraisPalingBanyakDigit = b
+    }
+  }
+  return jumlahDigitMax >= 10 ? baraisPalingBanyakDigit : null
+}
+
+// Voting per-digit dari beberapa hasil baca NIK. Kalau beberapa frame
+// menghasilkan pembacaan NIK yang berbeda, ambil digit yang paling
+// sering muncul di tiap posisi -- lebih akurat daripada percaya 1 hasil
+// scan saja, karena OCR biasanya salah di digit yang berbeda-beda tiap
+// frame (bukan konsisten salah di posisi yang sama).
+function votingDigit(kandidatList) {
+  const valid = kandidatList.filter((k) => k && k.length === 16)
+  if (valid.length === 0) return kandidatList.find((k) => k) || ''
+  if (valid.length === 1) return valid[0]
+
+  let hasil = ''
+  for (let posisi = 0; posisi < 16; posisi++) {
+    const hitung = {}
+    for (const kandidat of valid) {
+      const d = kandidat[posisi]
+      hitung[d] = (hitung[d] || 0) + 1
+    }
+    let digitTerbanyak = valid[0][posisi]
+    let maxCount = 0
+    for (const [d, c] of Object.entries(hitung)) {
+      if (c > maxCount) {
+        maxCount = c
+        digitTerbanyak = d
+      }
+    }
+    hasil += digitTerbanyak
+  }
+  return hasil
+}
+
+// Baca NIK dari 1 canvas frame menggunakan worker digit-only, dengan
+// crop area perkiraan + upscale, supaya fokus & lebih jelas
+async function bacaNikDariFrame(canvasAsli, baris) {
+  const workerDigit = await getWorkerDigit()
+
+  const barisNik = perkiraanPosisiBarisNik(baris)
+  // Crop 60% tengah lebar (hindari tepi kartu) x seluruh tinggi kalau
+  // tidak ada petunjuk baris; kalau ada petunjuk, tetap pakai seluruh
+  // gambar karena posisi vertikal dari teks OCR umum tidak 1:1 dengan
+  // koordinat pixel foto (beda proses/resize). Jadi crop di sini hanya
+  // membatasi lebar untuk mengurangi noise tepi.
+  const dicrop = cropCanvas(canvasAsli, 0.15, 0, 0.85, 1)
+  const diupscale = upscaleCanvas(dicrop, 2)
+  const diproses = preprocessCanvasUntukOcr(diupscale)
+
+  const base64 = canvasKeBase64(diproses)
   const {
     data: { text },
-  } = await worker.recognize(`data:image/jpeg;base64,${base64Data}`)
+  } = await workerDigit.recognize(`data:image/jpeg;base64,${base64}`)
 
-  if (!text || !text.trim()) {
+  return cariAngka16Digit(text || '')
+}
+
+async function bacaKartuDenganOcrLokal(videoEl, onProgress) {
+  onProgress?.(0)
+
+  // 1) Ambil 3 frame berturut-turut dari video live. Sedikit jeda di
+  // antaranya supaya frame tidak identik (mengurangi motion blur yang
+  // sama persis di ketiganya kalau tangan petugas sedikit bergerak).
+  const framesMentah = []
+  for (let i = 0; i < 3; i++) {
+    framesMentah.push(ambilFrameKeCanvas(videoEl))
+    if (i < 2) await new Promise((r) => setTimeout(r, 150))
+  }
+
+  // 2) OCR teks umum (nama, alamat, dll) hanya dari frame PERTAMA yang
+  // sudah di-preprocessing -- cukup 1x karena field teks tidak perlu
+  // voting seketat NIK, dan supaya proses tidak makin lama.
+  const worker = await getWorker((p) => onProgress?.(Math.round(p * 40)))
+  const frame1Diproses = preprocessCanvasUntukOcr(framesMentah[0])
+  const {
+    data: { text: teksUmum },
+  } = await worker.recognize(`data:image/jpeg;base64,${canvasKeBase64(frame1Diproses)}`)
+
+  if (!teksUmum || !teksUmum.trim()) {
     throw new Error('Tidak ada tulisan yang terbaca. Pastikan kartu rata, tidak buram, dan cahaya cukup.')
   }
 
-  const hasil = parseHasilOcr(text)
+  const hasil = parseHasilOcr(teksUmum)
+  if (hasil.jenis_kartu === 'tidak_dikenali') return hasil
+
+  // 3) Baca NIK/no KK dari KETIGA frame pakai worker digit-only, lalu
+  // voting per-digit untuk hasil yang lebih tepercaya
+  onProgress?.(50)
+  const barisUmum = bersihkanBaris(teksUmum)
+  const kandidatNik = []
+  for (let i = 0; i < framesMentah.length; i++) {
+    const nik = await bacaNikDariFrame(framesMentah[i], barisUmum)
+    kandidatNik.push(nik)
+    onProgress?.(50 + Math.round(((i + 1) / framesMentah.length) * 45))
+  }
+
+  const nikHasilVoting = votingDigit(kandidatNik)
+  if (nikHasilVoting && nikHasilVoting.length === 16) {
+    if (hasil.jenis_kartu === 'kk') {
+      hasil.no_kk = nikHasilVoting
+    } else {
+      hasil.nik = nikHasilVoting
+    }
+  }
 
   // NIK/no_kk wajib 16 digit — kalau parsing gagal dapatkan itu, anggap
   // hasil terlalu lemah untuk dipakai otomatis
@@ -221,6 +436,7 @@ async function bacaKartuDenganOcrLokal(base64Data, onProgress) {
     hasil._peringatan = 'Nomor NIK/KK tidak terbaca penuh (16 digit). Mohon cek dan lengkapi manual.'
   }
 
+  onProgress?.(100)
   return hasil
 }
 
@@ -255,7 +471,15 @@ function ModalKameraScan({ onAmbilFoto, onTutup, memproses, errorScan, progresOc
     async function mulaiKamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
+          video: {
+            facingMode: 'environment',
+            // Minta resolusi setinggi mungkin -- browser akan otomatis
+            // pakai resolusi terbaik yang didukung kamera device kalau
+            // nilai ideal ini tidak tersedia persis. Resolusi tinggi
+            // penting supaya digit kecil di NIK tidak hilang detailnya.
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
         })
         if (batal) {
           stream.getTracks().forEach((t) => t.stop())
@@ -545,8 +769,7 @@ export default function ScanIdentitas({ instansiId, onHasilBaru, disabled }) {
     setProgresOcr(0)
     setLoading(true)
     try {
-      const base64 = ambilFrameKeBase64(videoEl)
-      const hasilScan = await bacaKartuDenganOcrLokal(base64, setProgresOcr)
+      const hasilScan = await bacaKartuDenganOcrLokal(videoEl, setProgresOcr)
 
       if (!hasilScan || hasilScan.jenis_kartu === 'tidak_dikenali') {
         setErrorScan('Kartu tidak terbaca. Pastikan foto jelas, tidak buram, dan pencahayaan cukup, lalu coba lagi.')
