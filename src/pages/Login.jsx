@@ -21,6 +21,15 @@ const PROFESI_REDIRECT = {
   PERAWAT: '/dashboard/nakes/perawat',
   DOKTER: '/dashboard/nakes/dokter',
   APOTEKER: '/dashboard/nakes/apotek',
+  LABORAN: '/dashboard/nakes/lab',
+}
+
+// Redirect berdasarkan profesi khusus untuk nakes yang ditugaskan ke poli "IGD"
+// (dicek lewat poli_id -> nama_poli, bukan dari kolom profesi/role terpisah,
+// karena role & profesi IGD tetap sama seperti poli umum: nakes + perawat/dokter)
+const PROFESI_REDIRECT_IGD = {
+  PERAWAT: '/dashboard/nakes/igd/perawat',
+  DOKTER: '/dashboard/nakes/igd/dokter',
 }
 
 // Daftar aplikasi lain yang ditautkan di bawah form login Epiflowlytics.
@@ -229,7 +238,7 @@ export default function Login() {
 
     const { data: profileRow, error: profileError } = await supabase
       .from('profiles')
-      .select('role, profesi')
+      .select('role, profesi, poli_id, polis:poli_id(nama_poli)')
       .eq('id', data.user.id)
       .single()
 
@@ -240,9 +249,24 @@ export default function Login() {
       return
     }
 
-    // Jika role nakes, redirect berdasarkan profesi
+    // Jika role nakes, redirect berdasarkan profesi — tapi cek dulu apakah
+    // nakes ini ditugaskan ke poli "IGD", karena alur & dashboard IGD berbeda
+    // dari poli umum walau profesi (perawat/dokter) sama persis.
     if (profileRow.role === 'nakes') {
-      const tujuan = PROFESI_REDIRECT[profileRow.profesi?.toUpperCase()]
+      const profesiUpper = profileRow.profesi?.toUpperCase()
+      const namaPoli = profileRow.polis?.nama_poli
+
+      if (namaPoli === 'IGD') {
+        const tujuanIgd = PROFESI_REDIRECT_IGD[profesiUpper]
+        if (!tujuanIgd) {
+          setError('Profesi akun Anda belum didukung untuk IGD. Hubungi admin.')
+          return
+        }
+        navigate(tujuanIgd)
+        return
+      }
+
+      const tujuan = PROFESI_REDIRECT[profesiUpper]
       if (!tujuan) {
         setError('Profesi akun Anda belum dikenali. Hubungi admin.')
         return

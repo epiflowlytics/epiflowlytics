@@ -19,7 +19,7 @@ export default function Dashboard() {
     setError('')
 
     const [instansiRes, poliRes, stafRes] = await Promise.all([
-      supabase.from('instansis').select('nama').eq('id', instansiId).single(),
+      supabase.from('instansi').select('nama').eq('id', instansiId).single(),
       supabase.from('polis').select('id', { count: 'exact', head: true }).eq('instansi_id', instansiId),
       supabase
         .from('profiles')

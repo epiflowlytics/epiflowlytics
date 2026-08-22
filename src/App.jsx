@@ -16,12 +16,17 @@ import AdminInstansiLayout from './layouts/AdminInstansiLayout'
 import AdminInstansiDashboard from './pages/admin-instansi/Dashboard'
 import KelolaStaf from './pages/admin-instansi/KelolaStaf'
 import KelolaPasien from './pages/admin-instansi/KelolaPasien'
+import KelolaTarifRetribusi from './pages/admin-instansi/KelolaTarifRetribusi'
 import ProfilInstansi from './pages/admin-instansi/ProfilInstansi'
 import DashboardLoket from './pages/nakes/loket/DashboardLoket'
 import DashboardPerawat from './pages/nakes/poli-umum/perawat/DashboardPerawat'
 import DashboardDokter from './pages/nakes/poli-umum/dokter/DashboardDokter'
 import DashboardApoteker from './pages/nakes/apotek/DashboardApoteker'
+import DashboardLab from './pages/nakes/lab/DashboardLab'
 import AntrianDisplay from './pages/nakes/loket/AntrianDisplay'
+import DashboardPerawatIGD from './pages/nakes/igd/DashboardPerawatIGD'
+import DashboardDokterIGD from './pages/nakes/igd/DashboardDokterIGD'
+import KelolaRakIGD from './pages/nakes/igd/KelolaRakIGD'
 
 export default function App() {
   return (
@@ -59,6 +64,7 @@ export default function App() {
             <Route index element={<AdminInstansiDashboard />} />
             <Route path="staf" element={<KelolaStaf />} />
             <Route path="pasien" element={<KelolaPasien />} />
+            <Route path="tarif-retribusi" element={<KelolaTarifRetribusi />} />
             <Route path="profil" element={<ProfilInstansi />} />
           </Route>
 
@@ -92,12 +98,52 @@ export default function App() {
             }
           />
 
+          {/* Perawat IGD */}
+          <Route
+            path="/dashboard/nakes/igd/perawat"
+            element={
+              <ProtectedRoute allowedRoles={['nakes']}>
+                <DashboardPerawatIGD />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Dokter IGD */}
+          <Route
+            path="/dashboard/nakes/igd/dokter"
+            element={
+              <ProtectedRoute allowedRoles={['nakes']}>
+                <DashboardDokterIGD />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Rak Rekam Medis - Perawat IGD */}
+          <Route
+            path="/dashboard/nakes/igd/rak"
+            element={
+              <ProtectedRoute allowedRoles={['nakes']}>
+                <KelolaRakIGD />
+              </ProtectedRoute>
+            }
+          />
+
           {/* Apoteker */}
           <Route
             path="/dashboard/nakes/apotek"
             element={
               <ProtectedRoute allowedRoles={['nakes']}>
                 <DashboardApoteker />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Laboratorium */}
+          <Route
+            path="/dashboard/nakes/lab"
+            element={
+              <ProtectedRoute allowedRoles={['nakes']}>
+                <DashboardLab />
               </ProtectedRoute>
             }
           />

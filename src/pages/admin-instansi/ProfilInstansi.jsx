@@ -20,7 +20,7 @@ export default function ProfilInstansi() {
     setLoading(true)
     setError('')
     const { data, error } = await supabase
-      .from('instansis')
+      .from('instansi')
       .select('nama, jenis, kota, alamat, telepon')
       .eq('id', instansiId)
       .single()
@@ -55,7 +55,7 @@ export default function ProfilInstansi() {
 
     setSaving(true)
     const { error } = await supabase
-      .from('instansis')
+      .from('instansi')
       .update({
         nama: form.nama.trim(),
         jenis: form.jenis.trim() || 'puskesmas',

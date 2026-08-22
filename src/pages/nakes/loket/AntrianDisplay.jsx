@@ -63,12 +63,63 @@ export default function AntrianDisplay() {
   const jamRef = useRef(null)
   const [jam, setJam] = useState('')
   const [suaraAktif, setSuaraAktif] = useState(false)
+  const chimePembukaRef = useRef(null)
+  const chimePenutupRef = useRef(null)
+
+  function getChimePembuka() {
+    // Reuse satu instance Audio, dibuat saat "unlock" (klik user) agar tidak diblokir browser
+    if (!chimePembukaRef.current) {
+      chimePembukaRef.current = new Audio('/sounds/chime-pembuka.mp3')
+    }
+    return chimePembukaRef.current
+  }
+
+  function getChimePenutup() {
+    if (!chimePenutupRef.current) {
+      chimePenutupRef.current = new Audio('/sounds/chime-penutup.mp3')
+    }
+    return chimePenutupRef.current
+  }
+
+  function putarAudio(audioEl) {
+    // Bungkus play() jadi Promise yang resolve saat audio selesai diputar
+    return new Promise((resolve) => {
+      try {
+        audioEl.currentTime = 0
+        const selesai = () => {
+          audioEl.removeEventListener('ended', selesai)
+          resolve()
+        }
+        audioEl.addEventListener('ended', selesai)
+        audioEl.play().catch((e) => {
+          console.error('Gagal memutar audio:', e)
+          resolve()
+        })
+      } catch (e) {
+        console.error('Gagal memutar audio:', e)
+        resolve()
+      }
+    })
+  }
+
+  function mainkanChimePembuka() {
+    return putarAudio(getChimePembuka())
+  }
+
+  function mainkanChimePenutup() {
+    return putarAudio(getChimePenutup())
+  }
 
   function aktifkanSuara() {
     // Trik: ucapkan sesuatu sekali di dalam klik user untuk "unlock" speechSynthesis
     const test = new SpeechSynthesisUtterance('Suara antrian aktif')
     test.lang = 'id-ID'
     window.speechSynthesis.speak(test)
+    // Sekaligus "unlock" elemen audio chime, dalam interaksi klik yang sama
+    const pembuka = getChimePembuka()
+    const penutup = getChimePenutup()
+    pembuka.play().then(() => pembuka.pause()).catch(() => {})
+    penutup.play().then(() => penutup.pause()).catch(() => {})
     setSuaraAktif(true)
   }
 
@@ -186,13 +237,26 @@ export default function AntrianDisplay() {
     setDipanggil((prev) => ({ ...prev, [row.poli_id]: entri }))
     setRiwayat((prev) => [entri, ...prev].slice(0, 6))
 
-    // Suara panggilan (opsional, browser TTS)
+    // Suara panggilan: chime pembuka -> TTS -> chime penutup
     try {
       const namaPoli = poliData?.nama_poli || 'poli'
       const teks = `Nomor antrian ${row.nomor_antrian}, silakan menuju ${namaPoli}`
       const ucapan = new SpeechSynthesisUtterance(teks)
       ucapan.lang = 'id-ID'
-      window.speechSynthesis.speak(ucapan)
+
+      // "Warm up" speechSynthesis dari awal (bersamaan dgn chime pembuka main)
+      // supaya begitu chime selesai, TTS sudah siap & minim jeda saat speak() dipanggil nanti
+      window.speechSynthesis.cancel()
+
+      await mainkanChimePembuka()
+
+      await new Promise((resolve) => {
+        ucapan.onend = resolve
+        ucapan.onerror = resolve
+        window.speechSynthesis.speak(ucapan)
+      })
+
+      await mainkanChimePenutup()
     } catch (e) {
       console.error('Gagal memutar suara panggilan:', e)
     }

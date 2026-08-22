@@ -43,10 +43,17 @@ export default function DashboardPerawat() {
         pasien:pasien_id(
           nama_lengkap,
           tanggal_lahir,
+          tempat_lahir,
           jenis_kelamin,
           no_rekam_medis,
           kategori_pasien,
           no_bpjs,
+          no_nik,
+          no_kk,
+          urutan_kk,
+          status_keluarga,
+          status_keluarga_lainnya,
+          pekerjaan,
           alamat
         )
       `)
@@ -56,7 +63,41 @@ export default function DashboardPerawat() {
       .order('nomor_antrian', { ascending: true })
 
     if (error) console.error(error)
-    setAntrian(data || [])
+
+    // Urutkan: pasien dengan status_prioritas tampil lebih dulu,
+    // di antara sesama prioritas dan sesama non-prioritas tetap urut nomor antrian.
+    const urutan = (data || []).slice().sort((a, b) => {
+      const prioA = a.status_prioritas ? 1 : 0
+      const prioB = b.status_prioritas ? 1 : 0
+      if (prioA !== prioB) return prioB - prioA
+      return (a.nomor_antrian || 0) - (b.nomor_antrian || 0)
+    })
+
+    setAntrian(urutan)
+  }
+
+  function labelStatusKeluarga(value, teksLainnya) {
+    const opsi = {
+      kepala_keluarga: 'Kepala Keluarga',
+      ayah: 'Ayah',
+      ibu: 'Ibu',
+      anak: 'Anak',
+      cucu: 'Cucu',
+      menantu: 'Menantu',
+      famili_lain: 'Famili Lain',
+      lainnya: teksLainnya || 'Lainnya',
+    }
+    return opsi[value] || ''
+  }
+
+  function labelPrioritas(value) {
+    const opsi = {
+      lansia: { label: 'Lansia', icon: '🧓' },
+      ibu_hamil: { label: 'Ibu Hamil', icon: '🤰' },
+      disabilitas: { label: 'Disabilitas', icon: '♿' },
+      gawat_darurat: { label: 'Gawat Darurat', icon: '🚨' },
+    }
+    return opsi[value] || null
   }
 
   const sedangDipanggil = antrian.find((k) => k.status_panggil === 'dipanggil') || null
@@ -75,7 +116,12 @@ export default function DashboardPerawat() {
 
       const berikutnya = antrian
         .filter((k) => k.id !== sedangDipanggil?.id && k.status_panggil !== 'dipanggil')
-        .sort((a, b) => (a.nomor_antrian || 0) - (b.nomor_antrian || 0))[0]
+        .sort((a, b) => {
+          const prioA = a.status_prioritas ? 1 : 0
+          const prioB = b.status_prioritas ? 1 : 0
+          if (prioA !== prioB) return prioB - prioA
+          return (a.nomor_antrian || 0) - (b.nomor_antrian || 0)
+        })[0]
 
       if (!berikutnya) {
         setError('Tidak ada antrian menunggu di poli ini.')
@@ -266,12 +312,23 @@ export default function DashboardPerawat() {
                         {k.nomor_antrian ?? '-'}
                       </span>
                       <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-800 text-sm truncate">
+                        <p className="font-medium text-gray-800 text-sm truncate flex items-center gap-1">
+                          {labelPrioritas(k.status_prioritas) && (
+                            <span title={labelPrioritas(k.status_prioritas).label}>
+                              {labelPrioritas(k.status_prioritas).icon}
+                            </span>
+                          )}
                           {k.pasien.nama_lengkap}
                         </p>
                         <p className="text-xs text-gray-500">
                           {k.pasien.no_rekam_medis} • {hitungUmur(k.pasien.tanggal_lahir)} • {k.pasien.jenis_kelamin === 'L' ? 'Laki-laki' : 'Perempuan'}
                         </p>
+                        {k.pasien.status_keluarga && (
+                          <p className="text-[11px] text-gray-400">
+                            {labelStatusKeluarga(k.pasien.status_keluarga, k.pasien.status_keluarga_lainnya)}
+                            {k.pasien.no_kk ? ` • KK: ${k.pasien.no_kk}` : ''}
+                          </p>
+                        )}
                       </div>
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                         k.kategori_pasien === 'bpjs'
@@ -298,11 +355,39 @@ export default function DashboardPerawat() {
               <>
                 {/* Info Pasien */}
                 <div className="bg-gray-50 rounded-xl p-4 mb-5">
-                  <p className="font-semibold text-gray-800">{selected.pasien.nama_lengkap}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-semibold text-gray-800">{selected.pasien.nama_lengkap}</p>
+                    {labelPrioritas(selected.status_prioritas) && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
+                        {labelPrioritas(selected.status_prioritas).icon} {labelPrioritas(selected.status_prioritas).label}
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-gray-500 mt-1">
                     {selected.pasien.no_rekam_medis} • {hitungUmur(selected.pasien.tanggal_lahir)} • {selected.pasien.jenis_kelamin === 'L' ? 'Laki-laki' : 'Perempuan'}
                   </p>
+                  {selected.pasien.tempat_lahir && (
+                    <p className="text-xs text-gray-500">Lahir di: {selected.pasien.tempat_lahir}</p>
+                  )}
                   <p className="text-xs text-gray-500">{selected.pasien.alamat}</p>
+                  {selected.pasien.pekerjaan && (
+                    <p className="text-xs text-gray-500">Pekerjaan: {selected.pasien.pekerjaan}</p>
+                  )}
+                  {selected.pasien.no_nik && (
+                    <p className="text-xs text-gray-500">NIK: {selected.pasien.no_nik}</p>
+                  )}
+                  {selected.pasien.no_kk && (
+                    <p className="text-xs text-gray-500">
+                      KK: {selected.pasien.no_kk}
+                      {selected.pasien.status_keluarga && ` • ${labelStatusKeluarga(selected.pasien.status_keluarga, selected.pasien.status_keluarga_lainnya)}`}
+                      {selected.pasien.urutan_kk ? ` (anggota ke-${selected.pasien.urutan_kk})` : ''}
+                    </p>
+                  )}
+                  {selected.wilayah && (
+                    <p className="text-xs text-gray-500">
+                      Wilayah: {selected.wilayah === 'dalam' ? 'Dalam wilayah' : 'Luar wilayah'}
+                    </p>
+                  )}
                   {selected.kategori_pasien === 'bpjs' && (
                     <p className="text-xs text-blue-600 mt-1">BPJS: {selected.pasien.no_bpjs}</p>
                   )}

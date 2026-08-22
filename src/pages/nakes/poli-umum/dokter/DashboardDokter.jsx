@@ -40,6 +40,30 @@ export default function DashboardDokter() {
   const [penyakitDipilih, setPenyakitDipilih] = useState([])
   const adalahPD3I = penyakitDipilih.length > 0
 
+  // ─── Alur Lab ─────────────────────────────────────────────
+  // tujuan: 'apotek' (selesai periksa, seperti alur biasa) atau 'lab' (perlu pemeriksaan penunjang)
+  const [tujuan, setTujuan] = useState('apotek')
+  const [permintaanLabList, setPermintaanLabList] = useState([
+    { jenis_pemeriksaan: '', catatan_dokter: '' },
+  ])
+  const [riwayatHasilLab, setRiwayatHasilLab] = useState([]) // hasil lab kunjungan ini (kalau pasien balik dari lab)
+
+  function tambahPermintaanLab() {
+    setPermintaanLabList((prev) => [...prev, { jenis_pemeriksaan: '', catatan_dokter: '' }])
+  }
+
+  function hapusPermintaanLab(index) {
+    setPermintaanLabList((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function handlePermintaanLabChange(index, field, value) {
+    setPermintaanLabList((prev) => {
+      const next = [...prev]
+      next[index] = { ...next[index], [field]: value }
+      return next
+    })
+  }
+
   function toggleDeteksiPenyakit(nama) {
     setPenyakitDipilih((prev) =>
       prev.includes(nama) ? prev.filter((n) => n !== nama) : [...prev, nama]
@@ -71,20 +95,61 @@ export default function DashboardDokter() {
         pasien:pasien_id(
           nama_lengkap,
           tanggal_lahir,
+          tempat_lahir,
           jenis_kelamin,
           no_rekam_medis,
           kategori_pasien,
           no_bpjs,
+          no_nik,
+          no_kk,
+          urutan_kk,
+          status_keluarga,
+          status_keluarga_lainnya,
+          pekerjaan,
           alamat
         )
       `)
+      // 'menunggu_dokter' = pasien baru dari perawat, 'hasil_lab_selesai' = pasien balik dari lab
+      .in('status', ['menunggu_dokter', 'hasil_lab_selesai'])
       .eq('poli_id', poliId)
-      .eq('status', 'menunggu_dokter')
       .eq('tanggal_periksa', new Date().toISOString().split('T')[0])
       .order('nomor_antrian', { ascending: true })
 
     if (error) console.error(error)
-    setAntrian(data || [])
+
+    // Urutkan: pasien dengan status_prioritas tampil lebih dulu.
+    const urutan = (data || []).slice().sort((a, b) => {
+      const prioA = a.status_prioritas ? 1 : 0
+      const prioB = b.status_prioritas ? 1 : 0
+      if (prioA !== prioB) return prioB - prioA
+      return (a.nomor_antrian || 0) - (b.nomor_antrian || 0)
+    })
+
+    setAntrian(urutan)
+  }
+
+  function labelStatusKeluarga(value, teksLainnya) {
+    const opsi = {
+      kepala_keluarga: 'Kepala Keluarga',
+      ayah: 'Ayah',
+      ibu: 'Ibu',
+      anak: 'Anak',
+      cucu: 'Cucu',
+      menantu: 'Menantu',
+      famili_lain: 'Famili Lain',
+      lainnya: teksLainnya || 'Lainnya',
+    }
+    return opsi[value] || ''
+  }
+
+  function labelPrioritas(value) {
+    const opsi = {
+      lansia: { label: 'Lansia', icon: '🧓' },
+      ibu_hamil: { label: 'Ibu Hamil', icon: '🤰' },
+      disabilitas: { label: 'Disabilitas', icon: '♿' },
+      gawat_darurat: { label: 'Gawat Darurat', icon: '🚨' },
+    }
+    return opsi[value] || null
   }
 
   const sedangDipanggil = antrian.find((k) => k.status_panggil === 'dipanggil') || null
@@ -103,7 +168,12 @@ export default function DashboardDokter() {
 
       const berikutnya = antrian
         .filter((k) => k.id !== sedangDipanggil?.id && k.status_panggil !== 'dipanggil')
-        .sort((a, b) => (a.nomor_antrian || 0) - (b.nomor_antrian || 0))[0]
+        .sort((a, b) => {
+          const prioA = a.status_prioritas ? 1 : 0
+          const prioB = b.status_prioritas ? 1 : 0
+          if (prioA !== prioB) return prioB - prioA
+          return (a.nomor_antrian || 0) - (b.nomor_antrian || 0)
+        })[0]
 
       if (!berikutnya) {
         setError('Tidak ada antrian menunggu di poli ini.')
@@ -184,6 +254,9 @@ export default function DashboardDokter() {
       catatan: '',
     })
     setResepList([{ nama_obat: '', dosis: '', aturan_pakai: '', catatan: '', obat_id: '' }])
+    setTujuan('apotek')
+    setPermintaanLabList([{ jenis_pemeriksaan: '', catatan_dokter: '' }])
+    setRiwayatHasilLab([])
 
     // Ambil data skrining perawat untuk kunjungan ini
     const { data, error } = await supabase
@@ -199,17 +272,39 @@ export default function DashboardDokter() {
       setSkrining(null)
       setPd3iTerdeteksi([])
       setPenyakitDipilih([])
-      return
+    } else {
+      setSkrining(data)
+
+      // Deteksi PD3I otomatis dari keluhan_utama + catatan
+      const teksGabungan = `${data?.keluhan_utama || ''} ${data?.catatan || ''}`
+      const hasilDeteksi = deteksiPD3I(teksGabungan)
+      setPd3iTerdeteksi(hasilDeteksi)
+      // Default: semua hasil deteksi otomatis tercentang, dokter bisa batalkan yang tidak relevan
+      setPenyakitDipilih(hasilDeteksi.map((h) => h.nama))
     }
 
-    setSkrining(data)
+    // Kalau pasien ini balik dari lab, ambil hasil pemeriksaan labnya untuk ditampilkan
+    if (kunjungan.status === 'hasil_lab_selesai') {
+      await fetchHasilLab(kunjungan.id)
+    }
+  }
 
-    // Deteksi PD3I otomatis dari keluhan_utama + catatan
-    const teksGabungan = `${data?.keluhan_utama || ''} ${data?.catatan || ''}`
-    const hasilDeteksi = deteksiPD3I(teksGabungan)
-    setPd3iTerdeteksi(hasilDeteksi)
-    // Default: semua hasil deteksi otomatis tercentang, dokter bisa batalkan yang tidak relevan
-    setPenyakitDipilih(hasilDeteksi.map((h) => h.nama))
+  async function fetchHasilLab(kunjunganId) {
+    const { data, error } = await supabase
+      .from('permintaan_lab')
+      .select(`
+        id, jenis_pemeriksaan, catatan_dokter, status,
+        hasil_lab(id, nama_parameter, nilai_hasil, satuan, nilai_rujukan, keterangan)
+      `)
+      .eq('kunjungan_id', kunjunganId)
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      console.error(error)
+      setRiwayatHasilLab([])
+      return
+    }
+    setRiwayatHasilLab(data || [])
   }
 
   function handleFormChange(e) {
@@ -258,14 +353,25 @@ export default function DashboardDokter() {
     try {
       if (!form.diagnosis.trim()) throw new Error('Diagnosis wajib diisi.')
 
+      // Resep wajib hanya untuk alur "selesai -> apotek".
+      // Untuk alur "perlu lab", resep opsional karena obat baru ditentukan setelah hasil lab keluar.
       const resepValid = resepList.filter((r) => r.nama_obat.trim() && r.dosis.trim() && r.aturan_pakai.trim())
-      if (resepValid.length === 0) throw new Error('Minimal satu resep obat wajib diisi (nama obat, dosis, aturan pakai).')
 
-      const tanpaJumlah = resepValid.some((r) => !r.jumlah || parseFloat(r.jumlah) <= 0)
-      if (tanpaJumlah) throw new Error('Jumlah obat yang diberikan wajib diisi untuk setiap resep.')
+      if (tujuan === 'apotek') {
+        if (resepValid.length === 0) throw new Error('Minimal satu resep obat wajib diisi (nama obat, dosis, aturan pakai).')
 
-      const puyerTanpaJumlah = resepValid.some((r) => r.bentuk_sediaan === 'puyer' && (!r.jumlah_puyer || parseInt(r.jumlah_puyer, 10) <= 0))
-      if (puyerTanpaJumlah) throw new Error('Jumlah bungkus puyer wajib diisi untuk resep yang diracik/dipuyer.')
+        const tanpaJumlah = resepValid.some((r) => !r.jumlah || parseFloat(r.jumlah) <= 0)
+        if (tanpaJumlah) throw new Error('Jumlah obat yang diberikan wajib diisi untuk setiap resep.')
+
+        const puyerTanpaJumlah = resepValid.some((r) => r.bentuk_sediaan === 'puyer' && (!r.jumlah_puyer || parseInt(r.jumlah_puyer, 10) <= 0))
+        if (puyerTanpaJumlah) throw new Error('Jumlah bungkus puyer wajib diisi untuk resep yang diracik/dipuyer.')
+      }
+
+      let permintaanLabValid = []
+      if (tujuan === 'lab') {
+        permintaanLabValid = permintaanLabList.filter((p) => p.jenis_pemeriksaan.trim())
+        if (permintaanLabValid.length === 0) throw new Error('Minimal satu jenis pemeriksaan lab wajib diisi.')
+      }
 
       // 1. Simpan pemeriksaan
       const { data: pemeriksaanData, error: pemeriksaanErr } = await supabase
@@ -292,38 +398,67 @@ export default function DashboardDokter() {
 
       if (pemeriksaanErr) throw new Error(pemeriksaanErr.message)
 
-      // 2. Simpan resep (bisa banyak baris)
-      const resepRows = resepValid.map((r) => ({
-        pemeriksaan_id: pemeriksaanData.id,
-        kunjungan_id: selected.id,
-        nama_obat: r.nama_obat.trim(),
-        dosis: r.dosis.trim(),
-        aturan_pakai: r.aturan_pakai.trim(),
-        catatan: r.catatan.trim() || null,
-        obat_id: r.obat_id || null,
-        jumlah: r.jumlah ? parseFloat(r.jumlah) : null,
-        satuan_jumlah: r.satuan_jumlah || null,
-        bentuk_sediaan: r.bentuk_sediaan || 'utuh',
-        jumlah_puyer: r.bentuk_sediaan === 'puyer' && r.jumlah_puyer ? parseInt(r.jumlah_puyer, 10) : null,
-        status: 'menunggu',
-      }))
+      // 2. Simpan resep (bisa banyak baris, bisa kosong kalau tujuan = lab)
+      if (resepValid.length > 0) {
+        const resepRows = resepValid.map((r) => ({
+          pemeriksaan_id: pemeriksaanData.id,
+          kunjungan_id: selected.id,
+          nama_obat: r.nama_obat.trim(),
+          dosis: r.dosis.trim(),
+          aturan_pakai: r.aturan_pakai.trim(),
+          catatan: r.catatan.trim() || null,
+          obat_id: r.obat_id || null,
+          jumlah: r.jumlah ? parseFloat(r.jumlah) : null,
+          satuan_jumlah: r.satuan_jumlah || null,
+          bentuk_sediaan: r.bentuk_sediaan || 'utuh',
+          jumlah_puyer: r.bentuk_sediaan === 'puyer' && r.jumlah_puyer ? parseInt(r.jumlah_puyer, 10) : null,
+          status: 'menunggu',
+        }))
 
-      const { error: resepErr } = await supabase.from('resep').insert(resepRows)
-      if (resepErr) throw new Error(resepErr.message)
+        const { error: resepErr } = await supabase.from('resep').insert(resepRows)
+        if (resepErr) throw new Error(resepErr.message)
+      }
 
-      // 3. Update status kunjungan -> menunggu_obat (diproses apotek), reset status_panggil
-      const { error: updateErr } = await supabase
-        .from('kunjungan')
-        .update({ status: 'menunggu_obat', status_panggil: 'menunggu', waktu_panggil: null })
-        .eq('id', selected.id)
+      if (tujuan === 'lab') {
+        // 3a. Simpan permintaan pemeriksaan lab (bisa lebih dari satu jenis tes)
+        const permintaanRows = permintaanLabValid.map((p) => ({
+          kunjungan_id: selected.id,
+          pemeriksaan_id: pemeriksaanData.id,
+          diminta_oleh: profile.id,
+          jenis_pemeriksaan: p.jenis_pemeriksaan.trim(),
+          catatan_dokter: p.catatan_dokter.trim() || null,
+          status: 'menunggu',
+        }))
 
-      if (updateErr) throw new Error(updateErr.message)
+        const { error: labErr } = await supabase.from('permintaan_lab').insert(permintaanRows)
+        if (labErr) throw new Error(labErr.message)
 
-      setSukses(true)
+        // 3b. Update status kunjungan -> menunggu_lab, reset status_panggil untuk antrian di lab
+        const { error: updateErr } = await supabase
+          .from('kunjungan')
+          .update({ status: 'menunggu_lab', status_panggil: 'menunggu', waktu_panggil: null })
+          .eq('id', selected.id)
+
+        if (updateErr) throw new Error(updateErr.message)
+
+        setSukses('lab')
+      } else {
+        // 3c. Update status kunjungan -> menunggu_obat (diproses apotek), reset status_panggil
+        const { error: updateErr } = await supabase
+          .from('kunjungan')
+          .update({ status: 'menunggu_obat', status_panggil: 'menunggu', waktu_panggil: null })
+          .eq('id', selected.id)
+
+        if (updateErr) throw new Error(updateErr.message)
+
+        setSukses('apotek')
+      }
+
       setSelected(null)
       setSkrining(null)
       setPd3iTerdeteksi([])
       setPenyakitDipilih([])
+      setRiwayatHasilLab([])
       fetchAntrian(profile.poli_id)
     } catch (err) {
       setError(err.message)
@@ -345,9 +480,14 @@ export default function DashboardDokter() {
           <p className="text-gray-500 text-sm">Diagnosa &amp; Resep Pasien</p>
         </div>
 
-        {sukses && (
+        {sukses === 'apotek' && (
           <div className="mb-4 bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3 text-sm">
             ✅ Pemeriksaan dan resep berhasil disimpan, pasien diteruskan ke apotek.
+          </div>
+        )}
+        {sukses === 'lab' && (
+          <div className="mb-4 bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3 text-sm">
+            ✅ Pemeriksaan disimpan, pasien diteruskan ke laboratorium.
           </div>
         )}
 
@@ -415,12 +555,22 @@ export default function DashboardDokter() {
                         {k.nomor_antrian ?? '-'}
                       </span>
                       <div className="flex-1 min-w-0">
-                        <p className="font-medium text-gray-800 text-sm truncate">
+                        <p className="font-medium text-gray-800 text-sm truncate flex items-center gap-1">
+                          {labelPrioritas(k.status_prioritas) && (
+                            <span title={labelPrioritas(k.status_prioritas).label}>
+                              {labelPrioritas(k.status_prioritas).icon}
+                            </span>
+                          )}
                           {k.pasien.nama_lengkap}
                         </p>
                         <p className="text-xs text-gray-500">
                           {k.pasien.no_rekam_medis} • {hitungUmur(k.pasien.tanggal_lahir).teks}
                         </p>
+                        {k.status === 'hasil_lab_selesai' && (
+                          <span className="inline-block mt-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-teal-100 text-teal-700">
+                            🧪 Hasil Lab Sudah Ada
+                          </span>
+                        )}
                       </div>
                     </div>
                   </button>
@@ -440,12 +590,84 @@ export default function DashboardDokter() {
               <>
                 {/* Info Pasien */}
                 <div className="bg-gray-50 rounded-xl p-4 mb-4">
-                  <p className="font-semibold text-gray-800">{selected.pasien.nama_lengkap}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-semibold text-gray-800">{selected.pasien.nama_lengkap}</p>
+                    {labelPrioritas(selected.status_prioritas) && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
+                        {labelPrioritas(selected.status_prioritas).icon} {labelPrioritas(selected.status_prioritas).label}
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-gray-500 mt-1">
                     {selected.pasien.no_rekam_medis} • {umur.teks} • {selected.pasien.jenis_kelamin === 'L' ? 'Laki-laki' : 'Perempuan'}
                   </p>
+                  {selected.pasien.tempat_lahir && (
+                    <p className="text-xs text-gray-500">Lahir di: {selected.pasien.tempat_lahir}</p>
+                  )}
                   <p className="text-xs text-gray-500">{selected.pasien.alamat}</p>
+                  {selected.pasien.pekerjaan && (
+                    <p className="text-xs text-gray-500">Pekerjaan: {selected.pasien.pekerjaan}</p>
+                  )}
+                  {selected.pasien.no_nik && (
+                    <p className="text-xs text-gray-500">NIK: {selected.pasien.no_nik}</p>
+                  )}
+                  {selected.pasien.no_kk && (
+                    <p className="text-xs text-gray-500">
+                      KK: {selected.pasien.no_kk}
+                      {selected.pasien.status_keluarga && ` • ${labelStatusKeluarga(selected.pasien.status_keluarga, selected.pasien.status_keluarga_lainnya)}`}
+                      {selected.pasien.urutan_kk ? ` (anggota ke-${selected.pasien.urutan_kk})` : ''}
+                    </p>
+                  )}
+                  {selected.wilayah && (
+                    <p className="text-xs text-gray-500">
+                      Wilayah: {selected.wilayah === 'dalam' ? 'Dalam wilayah' : 'Luar wilayah'}
+                    </p>
+                  )}
+                  {selected.kategori_pasien === 'bpjs' && (
+                    <p className="text-xs text-blue-600">BPJS: {selected.pasien.no_bpjs}</p>
+                  )}
                 </div>
+
+                {/* Hasil Laboratorium (kalau pasien ini balik dari lab) */}
+                {riwayatHasilLab.length > 0 && (
+                  <div className="border-2 border-teal-300 bg-teal-50 rounded-xl p-4 mb-4">
+                    <p className="text-sm font-bold text-teal-700 mb-3">🧪 Hasil Pemeriksaan Laboratorium</p>
+                    <div className="space-y-3">
+                      {riwayatHasilLab.map((p) => (
+                        <div key={p.id} className="bg-white rounded-lg p-3 border border-teal-200">
+                          <p className="text-sm font-semibold text-gray-800">{p.jenis_pemeriksaan}</p>
+                          {p.catatan_dokter && (
+                            <p className="text-xs text-gray-500 mb-2">Permintaan: {p.catatan_dokter}</p>
+                          )}
+                          {p.hasil_lab && p.hasil_lab.length > 0 ? (
+                            <table className="w-full text-xs mt-2">
+                              <thead>
+                                <tr className="text-left text-gray-400 border-b">
+                                  <th className="py-1 pr-2">Parameter</th>
+                                  <th className="py-1 pr-2">Hasil</th>
+                                  <th className="py-1 pr-2">Rujukan</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {p.hasil_lab.map((h) => (
+                                  <tr key={h.id} className="border-b last:border-0">
+                                    <td className="py-1 pr-2 text-gray-700">{h.nama_parameter}</td>
+                                    <td className="py-1 pr-2 font-medium text-gray-800">
+                                      {h.nilai_hasil} {h.satuan || ''}
+                                    </td>
+                                    <td className="py-1 pr-2 text-gray-400">{h.nilai_rujukan || '-'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          ) : (
+                            <p className="text-xs text-gray-400 italic">Belum ada hasil untuk pemeriksaan ini.</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Hasil Skrining Perawat */}
                 {skrining ? (
@@ -627,11 +849,95 @@ export default function DashboardDokter() {
                     />
                   </div>
 
+                  {/* TUJUAN SETELAH PEMERIKSAAN */}
+                  <div className="border-t pt-4">
+                    <label className="block text-sm font-semibold text-gray-800 mb-2">
+                      Tujuan Setelah Pemeriksaan <span className="text-red-500">*</span>
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setTujuan('apotek')}
+                        className={`flex-1 py-2 rounded-lg border text-sm font-medium transition ${
+                          tujuan === 'apotek'
+                            ? 'bg-blue-600 text-white border-blue-600'
+                            : 'bg-white text-gray-600 border-gray-300'
+                        }`}
+                      >
+                        💊 Selesai → Apotek
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTujuan('lab')}
+                        className={`flex-1 py-2 rounded-lg border text-sm font-medium transition ${
+                          tujuan === 'lab'
+                            ? 'bg-teal-600 text-white border-teal-600'
+                            : 'bg-white text-gray-600 border-gray-300'
+                        }`}
+                      >
+                        🧪 Perlu Lab → Laboratorium
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* PERMINTAAN LAB (muncul kalau tujuan = lab) */}
+                  {tujuan === 'lab' && (
+                    <div className="border-t pt-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="block text-sm font-semibold text-gray-800">
+                          Jenis Pemeriksaan Lab <span className="text-red-500">*</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={tambahPermintaanLab}
+                          className="text-xs text-teal-600 hover:underline"
+                        >
+                          + Tambah pemeriksaan
+                        </button>
+                      </div>
+                      <div className="space-y-3">
+                        {permintaanLabList.map((p, i) => (
+                          <div key={i} className="border border-gray-200 rounded-xl p-3">
+                            <div className="flex gap-2 mb-2">
+                              <input
+                                type="text"
+                                value={p.jenis_pemeriksaan}
+                                onChange={(e) => handlePermintaanLabChange(i, 'jenis_pemeriksaan', e.target.value)}
+                                placeholder="Mis. Darah Lengkap, Gula Darah, Urine Lengkap"
+                                className="flex-1 border rounded-lg px-2 py-1.5 text-sm"
+                              />
+                              {permintaanLabList.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => hapusPermintaanLab(i)}
+                                  className="text-xs text-red-500 px-2"
+                                >
+                                  Hapus
+                                </button>
+                              )}
+                            </div>
+                            <input
+                              type="text"
+                              value={p.catatan_dokter}
+                              onChange={(e) => handlePermintaanLabChange(i, 'catatan_dokter', e.target.value)}
+                              placeholder="Catatan untuk petugas lab (opsional)"
+                              className="w-full border rounded-lg px-2 py-1.5 text-sm"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-xs text-gray-400 mt-2">
+                        Pasien akan diarahkan ke Laboratorium. Setelah hasil selesai, pasien otomatis kembali ke antrian dokter untuk pemeriksaan lanjutan.
+                      </p>
+                    </div>
+                  )}
+
                   {/* RESEP OBAT */}
                   <div className="border-t pt-4">
                     <div className="flex items-center justify-between mb-2">
                       <label className="block text-sm font-semibold text-gray-800">
-                        Resep Obat <span className="text-red-500">*</span>
+                        Resep Obat {tujuan === 'apotek' && <span className="text-red-500">*</span>}
+                        {tujuan === 'lab' && <span className="text-xs font-normal text-gray-400 ml-1">(opsional)</span>}
                       </label>
                       <button
                         type="button"
@@ -802,9 +1108,15 @@ export default function DashboardDokter() {
                     <button
                       type="submit"
                       disabled={loading}
-                      className="flex-1 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold disabled:opacity-50"
+                      className={`flex-1 py-2 rounded-lg text-white text-sm font-semibold disabled:opacity-50 ${
+                        tujuan === 'lab' ? 'bg-teal-600 hover:bg-teal-700' : 'bg-blue-600 hover:bg-blue-700'
+                      }`}
                     >
-                      {loading ? 'Menyimpan...' : 'Simpan & Teruskan ke Apotek →'}
+                      {loading
+                        ? 'Menyimpan...'
+                        : tujuan === 'lab'
+                        ? 'Simpan & Teruskan ke Laboratorium →'
+                        : 'Simpan & Teruskan ke Apotek →'}
                     </button>
                   </div>
 

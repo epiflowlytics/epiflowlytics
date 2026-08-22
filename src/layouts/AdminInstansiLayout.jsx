@@ -6,6 +6,7 @@ const MENU = [
   { to: '/dashboard/admin', label: 'Dashboard Ringkasan', end: true, icon: HomeIcon },
   { to: '/dashboard/admin/staf', label: 'Kelola Poli & Staf', icon: UsersIcon },
   { to: '/dashboard/admin/pasien', label: 'Data Pasien', icon: ClipboardIcon },
+  { to: '/dashboard/admin/tarif-retribusi', label: 'Kelola Tarif Retribusi', icon: CoinIcon },
   { to: '/dashboard/admin/profil', label: 'Profil Instansi', icon: BuildingIcon },
 ]
 
@@ -42,6 +43,14 @@ function BuildingIcon(props) {
       <rect x="4" y="3" width="11" height="18" rx="1" />
       <rect x="15" y="9" width="5" height="12" rx="1" />
       <path d="M7.5 7h1M7.5 11h1M7.5 15h1M11 7h1M11 11h1M11 15h1" strokeLinecap="round" />
+    </svg>
+  )
+}
+function CoinIcon(props) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" {...props}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5v9M9.5 9.7c0-1.1 1.1-2 2.5-2s2.5.7 2.5 1.8c0 2.4-5 1.3-5 3.7 0 1.1 1.1 1.8 2.5 1.8s2.5-.9 2.5-2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
