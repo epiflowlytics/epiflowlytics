@@ -24,6 +24,14 @@ const PROFESI_REDIRECT = {
   LABORAN: '/dashboard/nakes/lab',
   EPID: '/dashboard/nakes/epid',
   EPIDEMIOLOGI: '/dashboard/nakes/epid', // alias: sebagian akun mengisi profesi lengkap "epidemiologi", bukan singkatan "epid"
+
+  // SKM (Survei Kepuasan Masyarakat / Sarjana Kesehatan Masyarakat) — kelola profil publik puskesmas
+  SKM: '/puskesmas/batumalonro/settings',
+  'PETUGAS SKM': '/puskesmas/batumalonro/settings',
+  'TIM SKM': '/puskesmas/batumalonro/settings',
+  'SURVEI KEPUASAN MASYARAKAT': '/puskesmas/batumalonro/settings',
+  'SARJANA KESEHATAN MASYARAKAT': '/puskesmas/batumalonro/settings',
+  'KESEHATAN MASYARAKAT': '/puskesmas/batumalonro/settings',
 }
 
 // Redirect berdasarkan profesi khusus untuk nakes yang ditugaskan ke poli "IGD"

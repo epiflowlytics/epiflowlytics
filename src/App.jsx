@@ -28,6 +28,8 @@ import AntrianDisplay from './pages/nakes/loket/AntrianDisplay'
 import DashboardPerawatIGD from './pages/nakes/igd/DashboardPerawatIGD'
 import DashboardDokterIGD from './pages/nakes/igd/DashboardDokterIGD'
 import KelolaRakIGD from './pages/nakes/igd/KelolaRakIGD'
+import ProfilPuskesmas from './pages/nakes/skm/ProfilPuskesmas'
+import SettingPuskesmas from './pages/nakes/skm/SettingPuskesmas'
 
 export default function App() {
   return (
@@ -165,6 +167,23 @@ export default function App() {
             element={
               <ProtectedRoute allowedRoles={['nakes']}>
                 <AntrianDisplay />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* ── SKM: Profil Publik Puskesmas (generik, semua instansi) ── */}
+          {/* Halaman publik — bisa diakses siapa saja tanpa login. Kode instansi via URL. */}
+          <Route
+            path="/puskesmas/:kode"
+            element={<ProfilPuskesmas />}
+          />
+
+          {/* Halaman settings — hanya nakes / admin yang login. Akses per-instansi dicek di dalam komponen + RLS database. */}
+          <Route
+            path="/puskesmas/:kode/settings"
+            element={
+              <ProtectedRoute allowedRoles={['nakes', 'admin_instansi', 'super_owner']}>
+                <SettingPuskesmas />
               </ProtectedRoute>
             }
           />
