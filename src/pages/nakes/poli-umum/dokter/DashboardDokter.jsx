@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../../../lib/supabaseClient'
 import { deteksiPD3I } from './pd3iDetector'
 
@@ -11,8 +11,31 @@ export default function DashboardDokter() {
 
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [errorField, setErrorField] = useState(null)
   const [sukses, setSukses] = useState(false)
   const [loadingPanggil, setLoadingPanggil] = useState(false)
+
+  const diagnosisRef = useRef(null)
+  const tujuanRef = useRef(null)
+  const labRef = useRef(null)
+  const resepRef = useRef(null)
+
+  function tampilkanError(message, field = null) {
+    setError(message)
+    setErrorField(field)
+  }
+
+  function tutupErrorDanFokus() {
+    setError('')
+    const refMap = { diagnosis: diagnosisRef, tujuan: tujuanRef, lab: labRef, resep: resepRef }
+    const target = errorField ? refMap[errorField]?.current : null
+    setErrorField(null)
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      const focusable = target.querySelector('input, textarea, button')
+      if (focusable) focusable.focus()
+    }
+  }
 
   const [form, setForm] = useState({
     anamnesis: '',
@@ -36,9 +59,9 @@ export default function DashboardDokter() {
     },
   ])
 
-  const [pd3iTerdeteksi, setPd3iTerdeteksi] = useState([])
+  const [skdrTerdeteksi, setSkdrTerdeteksi] = useState([])
   const [penyakitDipilih, setPenyakitDipilih] = useState([])
-  const adalahPD3I = penyakitDipilih.length > 0
+  const adalahSKDR = penyakitDipilih.length > 0
 
   // ─── Alur Lab ─────────────────────────────────────────────
   // tujuan: 'apotek' (selesai periksa, seperti alur biasa) atau 'lab' (perlu pemeriksaan penunjang)
@@ -72,8 +95,19 @@ export default function DashboardDokter() {
 
   useEffect(() => {
     fetchProfile()
-    fetchObat()
   }, [])
+
+  // Deteksi SKDR realtime: gabungan keluhan_utama (skrining perawat) + Anamnesis + Diagnosis (dokter).
+  // Diagnosis paling diandalkan karena wajib diisi (ICD sering kosong), tapi tetap dipantau bersama
+  // Anamnesis dan Keluhan Utama supaya sinyal muncul sedini mungkin saat dokter mengetik.
+  useEffect(() => {
+    const teksGabungan = `${skrining?.keluhan_utama || ''} ${skrining?.catatan || ''} ${form.anamnesis} ${form.diagnosis}`
+    const hasilDeteksi = deteksiPD3I(teksGabungan)
+    setSkdrTerdeteksi(hasilDeteksi)
+    // Tidak auto-centang: dokter wajib konfirmasi eksplisit tiap penyakit yang relevan.
+    // Kalau ada penyakit yang sudah dicentang lalu kata kuncinya hilang dari teks, otomatis batal.
+    setPenyakitDipilih((prev) => prev.filter((nama) => hasilDeteksi.some((h) => h.nama === nama)))
+  }, [skrining, form.anamnesis, form.diagnosis])
 
   async function fetchProfile() {
     const { data: { user } } = await supabase.auth.getUser()
@@ -85,6 +119,7 @@ export default function DashboardDokter() {
       .single()
     setProfile(data)
     fetchAntrian(data.poli_id)
+    fetchObat(data.instansi_id)
   }
 
   async function fetchAntrian(poliId) {
@@ -210,12 +245,17 @@ export default function DashboardDokter() {
     }
   }
 
-  async function fetchObat() {
-    const { data, error } = await supabase
+  async function fetchObat(instansiId) {
+    const idInstansi = instansiId || profile?.instansi_id
+    let query = supabase
       .from('obat_masuk')
       .select('id, nama_obat, satuan, stok')
       .eq('is_aktif', true)
       .order('nama_obat', { ascending: true })
+
+    if (idInstansi) query = query.eq('instansi_id', idInstansi)
+
+    const { data, error } = await query
 
     if (error) {
       console.error(error)
@@ -270,17 +310,11 @@ export default function DashboardDokter() {
     if (error) {
       console.error(error)
       setSkrining(null)
-      setPd3iTerdeteksi([])
       setPenyakitDipilih([])
     } else {
       setSkrining(data)
-
-      // Deteksi PD3I otomatis dari keluhan_utama + catatan
-      const teksGabungan = `${data?.keluhan_utama || ''} ${data?.catatan || ''}`
-      const hasilDeteksi = deteksiPD3I(teksGabungan)
-      setPd3iTerdeteksi(hasilDeteksi)
-      // Default: semua hasil deteksi otomatis tercentang, dokter bisa batalkan yang tidak relevan
-      setPenyakitDipilih(hasilDeteksi.map((h) => h.nama))
+      setPenyakitDipilih([])
+      // Deteksi SKDR realtime ditangani oleh useEffect terpisah yang memantau skrining + form
     }
 
     // Kalau pasien ini balik dari lab, ambil hasil pemeriksaan labnya untuk ditampilkan
@@ -348,29 +382,50 @@ export default function DashboardDokter() {
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
+    setErrorField(null)
     setLoading(true)
 
     try {
-      if (!form.diagnosis.trim()) throw new Error('Diagnosis wajib diisi.')
+      if (!form.diagnosis.trim()) {
+        const err = new Error('Diagnosis wajib diisi.')
+        err.field = 'diagnosis'
+        throw err
+      }
 
       // Resep wajib hanya untuk alur "selesai -> apotek".
       // Untuk alur "perlu lab", resep opsional karena obat baru ditentukan setelah hasil lab keluar.
       const resepValid = resepList.filter((r) => r.nama_obat.trim() && r.dosis.trim() && r.aturan_pakai.trim())
 
       if (tujuan === 'apotek') {
-        if (resepValid.length === 0) throw new Error('Minimal satu resep obat wajib diisi (nama obat, dosis, aturan pakai).')
+        if (resepValid.length === 0) {
+          const err = new Error('Minimal satu resep obat wajib diisi (nama obat, dosis, aturan pakai).')
+          err.field = 'resep'
+          throw err
+        }
 
         const tanpaJumlah = resepValid.some((r) => !r.jumlah || parseFloat(r.jumlah) <= 0)
-        if (tanpaJumlah) throw new Error('Jumlah obat yang diberikan wajib diisi untuk setiap resep.')
+        if (tanpaJumlah) {
+          const err = new Error('Jumlah obat yang diberikan wajib diisi untuk setiap resep.')
+          err.field = 'resep'
+          throw err
+        }
 
         const puyerTanpaJumlah = resepValid.some((r) => r.bentuk_sediaan === 'puyer' && (!r.jumlah_puyer || parseInt(r.jumlah_puyer, 10) <= 0))
-        if (puyerTanpaJumlah) throw new Error('Jumlah bungkus puyer wajib diisi untuk resep yang diracik/dipuyer.')
+        if (puyerTanpaJumlah) {
+          const err = new Error('Jumlah bungkus puyer wajib diisi untuk resep yang diracik/dipuyer.')
+          err.field = 'resep'
+          throw err
+        }
       }
 
       let permintaanLabValid = []
       if (tujuan === 'lab') {
         permintaanLabValid = permintaanLabList.filter((p) => p.jenis_pemeriksaan.trim())
-        if (permintaanLabValid.length === 0) throw new Error('Minimal satu jenis pemeriksaan lab wajib diisi.')
+        if (permintaanLabValid.length === 0) {
+          const err = new Error('Minimal satu jenis pemeriksaan lab wajib diisi.')
+          err.field = 'lab'
+          throw err
+        }
       }
 
       // 1. Simpan pemeriksaan
@@ -382,8 +437,8 @@ export default function DashboardDokter() {
           anamnesis: form.anamnesis.trim() || null,
           diagnosis: form.diagnosis.trim(),
           kode_icd: form.kode_icd.trim() || null,
-          adalah_pd3i: adalahPD3I,
-          nama_pd3i: penyakitDipilih.length > 0 ? penyakitDipilih : null,
+          adalah_skdr: adalahSKDR,
+          nama_skdr: penyakitDipilih.length > 0 ? penyakitDipilih : null,
           tindakan: form.tindakan.trim() || null,
           rujukan: form.rujukan,
           tujuan_rujukan: form.rujukan ? form.tujuan_rujukan.trim() || null : null,
@@ -397,6 +452,20 @@ export default function DashboardDokter() {
         .single()
 
       if (pemeriksaanErr) throw new Error(pemeriksaanErr.message)
+
+      // 1b. Kalau dokter mengonfirmasi kasus SKDR, teruskan notifikasi ke petugas epid/surveilans instansi ini
+      if (penyakitDipilih.length > 0) {
+        const notifikasiRows = penyakitDipilih.map((nama) => ({
+          instansi_id: profile.instansi_id,
+          kunjungan_id: selected.id,
+          pemeriksaan_id: pemeriksaanData.id,
+          nama_penyakit: nama,
+          dokter_id: profile.id,
+        }))
+
+        const { error: notifErr } = await supabase.from('notifikasi_surveilans').insert(notifikasiRows)
+        if (notifErr) throw new Error(notifErr.message)
+      }
 
       // 2. Simpan resep (bisa banyak baris, bisa kosong kalau tujuan = lab)
       if (resepValid.length > 0) {
@@ -461,7 +530,7 @@ export default function DashboardDokter() {
       setRiwayatHasilLab([])
       fetchAntrian(profile.poli_id)
     } catch (err) {
-      setError(err.message)
+      tampilkanError(err.message, err.field || null)
     } finally {
       setLoading(false)
     }
@@ -689,41 +758,57 @@ export default function DashboardDokter() {
                   </div>
                 )}
 
-                {/* ALERT PD3I */}
-                {pd3iTerdeteksi.length > 0 && (
+                {/* ALERT SKDR - konfirmasi eksplisit, tidak auto-tercentang */}
+                {skdrTerdeteksi.length > 0 && (
                   <div className="border-2 border-red-300 bg-red-50 rounded-xl p-4 mb-4">
                     <p className="text-sm font-bold text-red-700 mb-2">
-                      🚨 Peringatan: Terindikasi Penyakit Surveilans (PD3I)
+                      🚨 Terdeteksi Indikasi Penyakit SKDR
                     </p>
-                    <p className="text-xs text-red-600 mb-2">
-                      Centang penyakit yang menurut Anda relevan. Yang dicentang akan tersimpan di data pemeriksaan.
+                    <p className="text-xs text-red-600 mb-3">
+                      Sistem mendeteksi kata kunci penyakit SKDR (Sistem Kewaspadaan Dini dan Respons) dari
+                      keluhan/anamnesis/diagnosis. Konfirmasi hanya penyakit yang menurut Anda benar terjadi —
+                      <span className="font-semibold"> setiap penyakit yang dikonfirmasi akan diteruskan sebagai
+                      notifikasi ke petugas surveilans/epidemiologi</span> untuk ditindaklanjuti.
                     </p>
                     <ul className="space-y-2">
-                      {pd3iTerdeteksi.map((item) => (
-                        <li key={item.nama} className="text-sm">
-                          <label className="flex items-start gap-2 text-red-700 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              className="mt-0.5"
-                              checked={penyakitDipilih.includes(item.nama)}
-                              onChange={() => toggleDeteksiPenyakit(item.nama)}
-                            />
-                            <span>
-                              <span className="font-semibold">{item.nama}</span>
-                              <span className="text-red-500 text-xs">
-                                {' '}— kata kunci: {item.cocok.join(', ')}
+                      {skdrTerdeteksi.map((item) => {
+                        const dikonfirmasi = penyakitDipilih.includes(item.nama)
+                        return (
+                          <li
+                            key={item.nama}
+                            className={`text-sm rounded-lg border p-2 ${
+                              dikonfirmasi ? 'border-red-400 bg-red-100' : 'border-red-200 bg-white'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <span>
+                                <span className="font-semibold text-red-700">{item.nama}</span>
+                                <span className="block text-red-500 text-xs mt-0.5">
+                                  kata kunci: {item.cocok.join(', ')}
+                                </span>
                               </span>
-                            </span>
-                          </label>
-                        </li>
-                      ))}
+                              <button
+                                type="button"
+                                onClick={() => toggleDeteksiPenyakit(item.nama)}
+                                className={`shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                                  dikonfirmasi
+                                    ? 'bg-red-600 text-white hover:bg-red-700'
+                                    : 'bg-white text-red-600 border border-red-400 hover:bg-red-50'
+                                }`}
+                              >
+                                {dikonfirmasi ? '✓ Dikonfirmasi — batalkan' : 'Konfirmasi benar'}
+                              </button>
+                            </div>
+                          </li>
+                        )
+                      })}
                     </ul>
-                  </div>
-                )}
-
-                {error && (
-                  <div className="mb-4 bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 text-sm">
-                    {error}
+                    {penyakitDipilih.length > 0 && (
+                      <p className="text-xs text-red-700 font-medium mt-3">
+                        ⚠️ {penyakitDipilih.length} penyakit dikonfirmasi. Notifikasi akan dikirim ke petugas
+                        surveilans/epidemiologi saat data ini disimpan.
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -743,7 +828,7 @@ export default function DashboardDokter() {
                   </div>
 
                   {/* Diagnosis + ICD */}
-                  <div className="grid grid-cols-3 gap-3">
+                  <div ref={diagnosisRef} className="grid grid-cols-3 gap-3">
                     <div className="col-span-2">
                       <label className="block text-sm font-medium text-gray-700 mb-1">
                         Diagnosis <span className="text-red-500">*</span>
@@ -882,7 +967,7 @@ export default function DashboardDokter() {
 
                   {/* PERMINTAAN LAB (muncul kalau tujuan = lab) */}
                   {tujuan === 'lab' && (
-                    <div className="border-t pt-4">
+                    <div ref={labRef} className="border-t pt-4">
                       <div className="flex items-center justify-between mb-2">
                         <label className="block text-sm font-semibold text-gray-800">
                           Jenis Pemeriksaan Lab <span className="text-red-500">*</span>
@@ -933,7 +1018,7 @@ export default function DashboardDokter() {
                   )}
 
                   {/* RESEP OBAT */}
-                  <div className="border-t pt-4">
+                  <div ref={resepRef} className="border-t pt-4">
                     <div className="flex items-center justify-between mb-2">
                       <label className="block text-sm font-semibold text-gray-800">
                         Resep Obat {tujuan === 'apotek' && <span className="text-red-500">*</span>}
@@ -1127,6 +1212,32 @@ export default function DashboardDokter() {
 
         </div>
       </div>
+
+      {/* MODAL POPUP VALIDASI */}
+      {error && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onClick={tutupErrorDanFokus}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto mb-4 text-2xl">
+              ⚠️
+            </div>
+            <h3 className="text-base font-semibold text-gray-800 mb-2">Belum Bisa Disimpan</h3>
+            <p className="text-sm text-gray-600 mb-5">{error}</p>
+            <button
+              type="button"
+              onClick={tutupErrorDanFokus}
+              className="w-full py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold"
+            >
+              Mengerti
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

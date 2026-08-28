@@ -1,12 +1,82 @@
-// pd3iDetector.js
+// pd3iDetector.js (v3)
 // Deteksi otomatis kecurigaan penyakit PD3I / surveilans SKDR
-// berdasarkan kata kunci di teks keluhan_utama (dan catatan).
+// berdasarkan kata kunci DAN variasi kata (sinonim/informal) di teks keluhan.
 //
-// Cara pakai:
+// Kamus sinonim & daftar kata negasi disimpan terpisah di kamusGejala.js
+// supaya mudah di-maintain tanpa menyentuh logika deteksi di file ini.
+// Lihat kamusGejala.js untuk cara menambah kata baru.
+//
+// PERUBAHAN DARI VERSI ASLI:
+// 1. Kata kunci mentah di ATURAN_PD3I sekarang jadi "key" yang merujuk ke
+//    KAMUS_SINONIM (di kamusGejala.js). Kata kunci asli tetap ada di kamus
+//    sebagai anggota pertama tiap grup, jadi cakupan deteksi lama tidak hilang.
+// 2. Deteksi negasi sederhana, dicek DUA ARAH:
+//    - sebelum kata kunci -> menangkap pola "tidak demam"
+//    - sesudah kata kunci  -> menangkap pola "demam disangkal"
+// 3. Logika wajib/salahSatu/salahSatu2 TIDAK diubah — perilaku inti tetap sama.
+//
+// CATATAN BELUM SELESAI (perlu keputusan Anda, lihat TODO di kamusGejala.js):
+// - Aturan "Gigitan Hewan Penular Rabies" pakai salahSatu2 (butuh 2 match).
+//   Setelah kamus sinonim aktif, satu kejadian gigitan bisa menghasilkan 2 match
+//   sekaligus (mis. "digigit anjing" cocok ke key 'digigit anjing' DAN
+//   'gigitan anjing'). Ini mengubah perilaku dibanding versi asli untuk kasus
+//   tertentu. Perlu ditinjau apakah aturan ini sebaiknya diubah ke salahSatu.
+//
+// Cara pakai (sama seperti sebelumnya):
 //   import { deteksiPD3I } from '../../../utils/pd3iDetector'
 //   const hasil = deteksiPD3I(keluhanText)
-//   // hasil: [{ nama: 'Suspek Campak', skor: 2 }, ...] terurut skor tertinggi
+//   // hasil: [{ nama: 'Suspek Campak', cocok: [...] }, ...]
 
+import { KAMUS_SINONIM, KATA_NEGASI } from './kamusGejala.js'
+
+function normalisasi(teks) {
+  return (teks || '').toLowerCase().trim()
+}
+
+/**
+ * Cari satu konsep (key kamus) di teks, termasuk semua sinonimnya,
+ * lalu kecualikan kecocokan yang berdekatan dengan kata negasi —
+ * baik negasi yang muncul SEBELUM maupun SESUDAH kata kunci.
+ *
+ * Batasan yang jujur perlu diketahui:
+ * - Ini deteksi negasi SEDERHANA berbasis jarak karakter (window ~20 karakter
+ *   di tiap sisi), bukan analisis gramatikal/NLP penuh. Kalimat yang rumit
+ *   atau negasi yang jauh dari kata kunci (misalnya menyeberang lebih dari
+ *   satu klausa) bisa saja tidak tertangkap.
+ * - Kamus sinonim masih berupa dugaan variasi kata umum dan sebaiknya
+ *   divalidasi oleh tenaga medis/petugas surveilans yang paham istilah nyata
+ *   yang dipakai di rekam medis Anda.
+ */
+function cariKonsep(teks, key) {
+  const daftarSinonim = KAMUS_SINONIM[key] || [key]
+  const ditemukan = []
+  const JARAK_CEK = 20 // jumlah karakter yang dicek di tiap sisi kata kunci
+
+  for (const kata of daftarSinonim) {
+    let mulaiCari = 0
+    let idx
+    while ((idx = teks.indexOf(kata, mulaiCari)) !== -1) {
+      const konteksSebelum = teks.slice(Math.max(0, idx - JARAK_CEK), idx).trim()
+      const konteksSesudah = teks.slice(idx + kata.length, idx + kata.length + JARAK_CEK).trim()
+
+      const dinegasikanSebelum = KATA_NEGASI.some((neg) => konteksSebelum.endsWith(neg))
+      const dinegasikanSesudah = KATA_NEGASI.some((neg) => konteksSesudah.startsWith(neg))
+
+      if (!dinegasikanSebelum && !dinegasikanSesudah) {
+        ditemukan.push(kata)
+        break // cukup satu kecocokan valid per sinonim, lanjut ke sinonim berikutnya
+      }
+      mulaiCari = idx + kata.length
+    }
+  }
+
+  return ditemukan
+}
+
+// ─────────────────────────────────────────────────────────────
+// ATURAN_PD3I — struktur & isi IDENTIK dengan file asli,
+// hanya kata kunci mentah yang sekarang jadi "key" ke KAMUS_SINONIM.
+// ─────────────────────────────────────────────────────────────
 const ATURAN_PD3I = [
   {
     nama: 'Suspek Kolera',
@@ -51,7 +121,7 @@ const ATURAN_PD3I = [
   {
     nama: 'ISPA',
     wajib: [],
-    salahSatu2: ['batuk', 'pilek'], // butuh minimal 2 dari daftar ini
+    salahSatu2: ['batuk', 'pilek'],
   },
   {
     nama: 'ILI (Penyakit Serupa Influenza)',
@@ -130,12 +200,10 @@ const ATURAN_PD3I = [
   },
 ]
 
-function normalisasi(teks) {
-  return (teks || '').toLowerCase().trim()
-}
-
 /**
  * Deteksi kecurigaan penyakit PD3I dari teks bebas.
+ * Signature dan bentuk hasil SAMA PERSIS dengan versi asli — aman untuk
+ * menggantikan file lama tanpa mengubah kode pemanggil (DashboardDokter.jsx).
  * @param {string} teks - gabungan keluhan_utama + catatan
  * @returns {Array<{nama: string, cocok: string[]}>}
  */
@@ -148,26 +216,35 @@ export function deteksiPD3I(teks) {
   for (const aturan of ATURAN_PD3I) {
     const cocok = []
 
-    // Cek kata wajib (semua harus ada)
-    const wajibTerpenuhi = (aturan.wajib || []).every((kw) => {
-      const ada = t.includes(kw)
-      if (ada) cocok.push(kw)
-      return ada
+    const wajibTerpenuhi = (aturan.wajib || []).every((key) => {
+      const ditemukan = cariKonsep(t, key)
+      if (ditemukan.length > 0) cocok.push(...ditemukan)
+      return ditemukan.length > 0
     })
     if ((aturan.wajib || []).length > 0 && !wajibTerpenuhi) continue
 
-    // Cek salahSatu (minimal 1 dari daftar)
     if (aturan.salahSatu) {
-      const ditemukan = aturan.salahSatu.filter((kw) => t.includes(kw))
-      if (aturan.salahSatu.length > 0 && ditemukan.length === 0) continue
-      cocok.push(...ditemukan)
+      let adaYangCocok = false
+      for (const key of aturan.salahSatu) {
+        const ditemukan = cariKonsep(t, key)
+        if (ditemukan.length > 0) {
+          adaYangCocok = true
+          cocok.push(...ditemukan)
+        }
+      }
+      if (aturan.salahSatu.length > 0 && !adaYangCocok) continue
     }
 
-    // Cek salahSatu2 (minimal 2 dari daftar, dipakai saat tidak ada kata "wajib")
     if (aturan.salahSatu2) {
-      const ditemukan = aturan.salahSatu2.filter((kw) => t.includes(kw))
-      if (ditemukan.length < 2) continue
-      cocok.push(...ditemukan)
+      let jumlahKeyCocok = 0
+      for (const key of aturan.salahSatu2) {
+        const ditemukan = cariKonsep(t, key)
+        if (ditemukan.length > 0) {
+          jumlahKeyCocok++
+          cocok.push(...ditemukan)
+        }
+      }
+      if (jumlahKeyCocok < 2) continue
     }
 
     if (cocok.length > 0) {

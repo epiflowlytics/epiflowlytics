@@ -22,6 +22,8 @@ const PROFESI_REDIRECT = {
   DOKTER: '/dashboard/nakes/dokter',
   APOTEKER: '/dashboard/nakes/apotek',
   LABORAN: '/dashboard/nakes/lab',
+  EPID: '/dashboard/nakes/epid',
+  EPIDEMIOLOGI: '/dashboard/nakes/epid', // alias: sebagian akun mengisi profesi lengkap "epidemiologi", bukan singkatan "epid"
 }
 
 // Redirect berdasarkan profesi khusus untuk nakes yang ditugaskan ke poli "IGD"

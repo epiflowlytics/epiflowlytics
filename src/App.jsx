@@ -23,6 +23,7 @@ import DashboardPerawat from './pages/nakes/poli-umum/perawat/DashboardPerawat'
 import DashboardDokter from './pages/nakes/poli-umum/dokter/DashboardDokter'
 import DashboardApoteker from './pages/nakes/apotek/DashboardApoteker'
 import DashboardLab from './pages/nakes/lab/DashboardLab'
+import DashboardEpid from './pages/nakes/epid/DashboardEpid'
 import AntrianDisplay from './pages/nakes/loket/AntrianDisplay'
 import DashboardPerawatIGD from './pages/nakes/igd/DashboardPerawatIGD'
 import DashboardDokterIGD from './pages/nakes/igd/DashboardDokterIGD'
@@ -144,6 +145,16 @@ export default function App() {
             element={
               <ProtectedRoute allowedRoles={['nakes']}>
                 <DashboardLab />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Surveilans (Epid) */}
+          <Route
+            path="/dashboard/nakes/epid"
+            element={
+              <ProtectedRoute allowedRoles={['nakes']}>
+                <DashboardEpid />
               </ProtectedRoute>
             }
           />

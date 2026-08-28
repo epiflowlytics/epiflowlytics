@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../../../lib/supabaseClient'
+import { useAuth } from '../../../context/AuthContext'
 import AntrianDisplay from './AntrianDisplay'
 import CekAntrian from './CekAntrian'
 import DatePickerLahir from './DatePickerLahir'
@@ -32,12 +33,27 @@ import {
    ──────────────────────────────────────────────────────────────── */
 
 export default function DashboardLoket() {
+  const { signOut } = useAuth()
   const [step, setStep] = useState('kategori')
   const [form, setForm] = useState(FORM_AWAL)
   const [polis, setPolis] = useState([])
   const [petugasPoliList, setPetugasPoliList] = useState([]) // nakes aktif (dokter/PJ ruangan), dipakai untuk dipilih sebagai penanggung jawab pasien di poli tujuan
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [errorFieldId, setErrorFieldId] = useState(null)
+
+  // Scroll ke field yang bermasalah + kasih highlight sebentar, dipanggil
+  // saat user menutup popup alert validasi.
+  function scrollToErrorField(fieldId) {
+    if (!fieldId) return
+    const el = document.getElementById(fieldId)
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('ring-2', 'ring-red-400', 'rounded-lg')
+    setTimeout(() => {
+      el.classList.remove('ring-2', 'ring-red-400', 'rounded-lg')
+    }, 2000)
+  }
   const [sukses, setSukses] = useState(false)
   const [profile, setProfile] = useState(null)
   const [tiketAntrian, setTiketAntrian] = useState(null) // { nomor, namaPoli }
@@ -66,6 +82,7 @@ export default function DashboardLoket() {
   const [rakList, setRakList] = useState([])
   const [showKelolaRak, setShowKelolaRak] = useState(false)
   const [showModalRetribusi, setShowModalRetribusi] = useState(false)
+  const [showKonfirmasiLogout, setShowKonfirmasiLogout] = useState(false)
   const [rakForm, setRakForm] = useState({ id: null, kode_rak: '', nama_rak: '' })
   const [rakLoading, setRakLoading] = useState(false)
   const [rakError, setRakError] = useState('')
@@ -1176,23 +1193,48 @@ export default function DashboardLoket() {
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
+    setErrorFieldId(null)
     setLoading(true)
 
     try {
-      if (!form.nama_lengkap.trim()) throw new Error('Nama lengkap wajib diisi.')
-      if (!form.tanggal_lahir) throw new Error('Tanggal lahir wajib diisi.')
-      if (!form.jenis_kelamin) throw new Error('Jenis kelamin wajib dipilih.')
-      if (!form.kategori_pasien) throw new Error('Kategori pasien (Umum/BPJS) wajib dipilih.')
+      if (!form.nama_lengkap.trim()) {
+        setErrorFieldId('field-nama_lengkap')
+        throw new Error('Nama lengkap wajib diisi.')
+      }
+      if (!form.tanggal_lahir) {
+        setErrorFieldId('field-tanggal_lahir')
+        throw new Error('Tanggal lahir wajib diisi.')
+      }
+      if (!form.jenis_kelamin) {
+        setErrorFieldId('field-jenis_kelamin')
+        throw new Error('Jenis kelamin wajib dipilih.')
+      }
+      if (!form.kategori_pasien) {
+        setErrorFieldId('field-kategori_pasien')
+        throw new Error('Kategori pasien (Umum/BPJS) wajib dipilih.')
+      }
       if (form.kategori_pasien === 'bpjs' && form.status_bpjs_aktif === null) {
+        setErrorFieldId('field-status_bpjs_aktif')
         throw new Error('Status keaktifan BPJS wajib dicek dan dipilih (Aktif / Tidak Aktif) terlebih dahulu.')
       }
-      if (!form.wilayah) throw new Error('Wilayah wajib dipilih.')
-      if (!form.poli_id) throw new Error('Poli tujuan wajib dipilih.')
-      if (!form.no_rekam_medis.trim()) throw new Error('Nomor rekam medis wajib diisi.')
+      if (!form.wilayah) {
+        setErrorFieldId('field-wilayah')
+        throw new Error('Wilayah wajib dipilih.')
+      }
+      if (!form.poli_id) {
+        setErrorFieldId('field-poli_id')
+        throw new Error('Poli tujuan wajib dipilih.')
+      }
+      if (!form.no_rekam_medis.trim()) {
+        setErrorFieldId('field-no_rekam_medis')
+        throw new Error('Nomor rekam medis wajib diisi.')
+      }
       if (form.kategori_pasien === 'bpjs' && !form.no_bpjs.trim()) {
+        setErrorFieldId('field-no_bpjs')
         throw new Error('Nomor BPJS wajib diisi untuk pasien BPJS.')
       }
       if (form.no_nik && validasiNik(form.no_nik).status === 'invalid') {
+        setErrorFieldId('field-no_nik')
         throw new Error(validasiNik(form.no_nik).pesan)
       }
 
@@ -1435,6 +1477,15 @@ export default function DashboardLoket() {
                     <span className="text-4xl">💵</span>
                     <span className="text-lg font-bold text-center leading-tight">RETRIBUSI</span>
                   </button>
+
+                  {/* Logout — keluar dari akun */}
+                  <button
+                    onClick={() => setShowKonfirmasiLogout(true)}
+                    className="w-40 h-40 rounded-2xl bg-red-600 hover:bg-red-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition"
+                  >
+                    <span className="text-4xl">🚪</span>
+                    <span className="text-lg font-bold text-center leading-tight">LOGOUT</span>
+                  </button>
                 </div>
               </div>
 
@@ -1559,8 +1610,46 @@ export default function DashboardLoket() {
         show={showModalRetribusi}
         onClose={() => setShowModalRetribusi(false)}
         instansiId={profile?.instansi_id}
+        instansi={profile?.instansi}
         petugasId={profile?.id}
       />
+
+      {/* Konfirmasi Logout */}
+      {showKonfirmasiLogout && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          onClick={() => setShowKonfirmasiLogout(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 text-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-3xl">
+              🚪
+            </div>
+            <p className="text-sm font-semibold text-gray-800 mb-1">Keluar dari akun?</p>
+            <p className="text-sm text-gray-500 mb-5">
+              Anda akan keluar dari sesi loket ini dan harus login kembali untuk melanjutkan.
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowKonfirmasiLogout(false)}
+                className="flex-1 rounded-lg border border-gray-300 text-gray-600 text-sm font-medium py-2.5 hover:bg-gray-50 transition"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={signOut}
+                className="flex-1 rounded-lg bg-red-600 text-white text-sm font-medium py-2.5 hover:bg-red-700 transition"
+              >
+                Ya, Keluar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       </div>
     )
   }
@@ -1735,15 +1824,41 @@ export default function DashboardLoket() {
         )}
 
         {error && (
-          <div className="mb-4 bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 text-sm">
-            {error}
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+            onClick={() => {
+              setError('')
+              scrollToErrorField(errorFieldId)
+            }}
+          >
+            <div
+              className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 text-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+                <svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m0 3.75h.007v.008H12v-.008zM21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+              <p className="text-sm text-gray-700 mb-5">{error}</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setError('')
+                  scrollToErrorField(errorFieldId)
+                }}
+                className="w-full rounded-lg bg-red-600 text-white text-sm font-medium py-2.5 hover:bg-red-700 transition"
+              >
+                Oke, mengerti
+              </button>
+            </div>
           </div>
         )}
 
         <form ref={formRef} onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-sm p-6 space-y-5">
 
           {/* NIK — FITUR 6: Validasi otomatis + autofill dari data pasien lama */}
-          <div>
+          <div id="field-no_nik">
             <div className="flex items-center justify-between mb-1">
               <label className="block text-sm font-medium text-gray-700">
                 Nomor NIK
@@ -1800,7 +1915,7 @@ export default function DashboardLoket() {
 
           {/* Nomor BPJS */}
           {form.kategori_pasien === 'bpjs' && (
-            <div>
+            <div id="field-no_bpjs">
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-sm font-medium text-gray-700">
                   Nomor BPJS <span className="text-red-500">*</span>
@@ -1841,7 +1956,7 @@ export default function DashboardLoket() {
                   Kalau form dibuka lewat wizard "Periksa Pasien" dari rak, ini sudah
                   dikonfirmasi di wizard sebelumnya, jadi field ini dihilangkan di sini. */}
               {!form.dari_periksa_rak && (
-                <div className="mt-2">
+                <div id="field-status_bpjs_aktif" className="mt-2">
                   <p className="text-xs font-medium text-gray-600 mb-1">
                     Status Keaktifan BPJS <span className="text-red-500">*</span>
                   </p>
@@ -1967,7 +2082,7 @@ export default function DashboardLoket() {
           {/* Nomor Rekam Medis — sama, kalau dari wizard Periksa Rak, no. RM pasien
               sudah ada, jadi field ini dihilangkan di sini. */}
           {!form.dari_periksa_rak && (
-            <div>
+            <div id="field-no_rekam_medis">
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Nomor Rekam Medis
               </label>
@@ -2025,7 +2140,7 @@ export default function DashboardLoket() {
           </div>
 
           {/* Nama Pasien */}
-          <div>
+          <div id="field-nama_lengkap">
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Nama Lengkap Pasien <span className="text-red-500">*</span>
             </label>
@@ -2055,7 +2170,7 @@ export default function DashboardLoket() {
               />
             </div>
 
-            <div>
+            <div id="field-tanggal_lahir">
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Tanggal Lahir <span className="text-red-500">*</span>
               </label>
@@ -2080,7 +2195,7 @@ export default function DashboardLoket() {
 
           {/* Jenis Kelamin & Pekerjaan */}
           <div className="grid grid-cols-2 gap-4">
-            <div>
+            <div id="field-jenis_kelamin">
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Jenis Kelamin <span className="text-red-500">*</span>
               </label>
@@ -2144,7 +2259,7 @@ export default function DashboardLoket() {
           {/* Kategori Pasien — kalau form dibuka lewat wizard "Periksa Pasien" dari rak,
               kategori ini sudah dipilih di wizard sebelumnya, jadi field ini dihilangkan di sini. */}
           {!form.dari_periksa_rak && (
-            <div>
+            <div id="field-kategori_pasien">
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Kategori Pasien <span className="text-red-500">*</span>
               </label>
@@ -2181,7 +2296,7 @@ export default function DashboardLoket() {
           )}
 
           {/* Wilayah */}
-          <div>
+          <div id="field-wilayah">
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Wilayah Pasien <span className="text-red-500">*</span>
             </label>
@@ -2206,7 +2321,7 @@ export default function DashboardLoket() {
           {/* Poli Tujuan — kalau form dibuka lewat wizard "Periksa Pasien" dari rak,
               poli sudah dipilih di wizard sebelumnya, jadi field ini dihilangkan di sini. */}
           {!form.dari_periksa_rak && (
-            <div>
+            <div id="field-poli_id">
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Poli Tujuan <span className="text-red-500">*</span>
               </label>

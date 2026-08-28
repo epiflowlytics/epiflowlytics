@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from '../../../lib/supabaseClient'
 import { OPSI_PERIODE, hitungRentangPeriode, labelPeriode } from './utils/periodeHelpers'
+import { buatPdfLaporanRetribusi, downloadPdfRetribusi } from './utils/exportPdfRetribusi'
+import { downloadExcelRetribusi } from './utils/exportExcelRetribusi'
 
 // ─── KOMPONEN MANDIRI: Modal Retribusi Loket ──────────────────────
 // File terpisah dari DashboardLoket.jsx supaya gampang di-maintain.
@@ -11,7 +13,7 @@ import { OPSI_PERIODE, hitungRentangPeriode, labelPeriode } from './utils/period
 //
 // Sumber data: tabel tagihan_kunjungan (join kunjungan -> pasien, poli).
 // Kolom status setor: disetor (boolean), disetor_pada, disetor_oleh.
-export default function ModalRetribusi({ show, onClose, instansiId, petugasId }) {
+export default function ModalRetribusi({ show, onClose, instansiId, instansi, petugasId }) {
   const [periode, setPeriode] = useState('hari')
   const [customMulai, setCustomMulai] = useState('')
   const [customAkhir, setCustomAkhir] = useState('')
@@ -20,6 +22,8 @@ export default function ModalRetribusi({ show, onClose, instansiId, petugasId })
   const [error, setError] = useState('')
   const [storLoading, setStorLoading] = useState(false)
   const [storSukses, setStorSukses] = useState('')
+  const [showPreview, setShowPreview] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState('')
 
   const { mulai, akhir } = hitungRentangPeriode(periode, customMulai, customAkhir)
   const labelPeriodeStr = labelPeriode(periode, mulai, akhir)
@@ -79,6 +83,27 @@ export default function ModalRetribusi({ show, onClose, instansiId, petugasId })
     return Array.from(map.values()).sort((a, b) => b.total - a.total)
   }, [rows])
 
+  // Rekap per poli — SEMUA transaksi (disetor + belum), untuk melihat
+  // total retribusi riil per loket/poli di periode yang dipilih,
+  // terlepas dari status setor.
+  const rekapPerPoliSemua = useMemo(() => {
+    const map = new Map()
+    for (const r of rows) {
+      const namaPoli = r.kunjungan?.poli?.nama_poli || 'Tanpa Poli'
+      const existing = map.get(namaPoli) || { namaPoli, jumlahPasien: 0, total: 0 }
+      existing.jumlahPasien += 1
+      existing.total += Number(r.nominal || 0)
+      map.set(namaPoli, existing)
+    }
+    return Array.from(map.values()).sort((a, b) => b.total - a.total)
+  }, [rows])
+
+  const totalSemua = useMemo(
+    () => rows.reduce((sum, r) => sum + Number(r.nominal || 0), 0),
+    [rows]
+  )
+  const jumlahSemua = rows.length
+
   const totalBelumDisetor = useMemo(
     () => rows.filter((r) => !r.disetor).reduce((sum, r) => sum + Number(r.nominal || 0), 0),
     [rows]
@@ -119,6 +144,27 @@ export default function ModalRetribusi({ show, onClose, instansiId, petugasId })
     fetchData()
   }
 
+  function bukaPreviewPdf() {
+    const doc = buatPdfLaporanRetribusi(rows, rekapPerPoli, totalBelumDisetor, jumlahBelumDisetor, instansi, periode, mulai, akhir, rekapPerPoliSemua, totalSemua, jumlahSemua)
+    const url = doc.output('bloburl')
+    setPreviewUrl(url)
+    setShowPreview(true)
+  }
+
+  function unduhPdf() {
+    downloadPdfRetribusi(rows, rekapPerPoli, totalBelumDisetor, jumlahBelumDisetor, instansi, periode, mulai, akhir, `retribusi-loket-${mulai}_${akhir}.pdf`, rekapPerPoliSemua, totalSemua, jumlahSemua)
+  }
+
+  function unduhExcel() {
+    downloadExcelRetribusi(rows, rekapPerPoli, totalBelumDisetor, jumlahBelumDisetor, instansi, periode, mulai, akhir, `retribusi-loket-${mulai}_${akhir}.xlsx`, rekapPerPoliSemua, totalSemua, jumlahSemua)
+  }
+
+  function tutupPreview() {
+    setShowPreview(false)
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    setPreviewUrl('')
+  }
+
   if (!show) return null
 
   return (
@@ -132,13 +178,39 @@ export default function ModalRetribusi({ show, onClose, instansiId, petugasId })
       >
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold text-gray-800">💵 Retribusi Loket</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 text-xl leading-none"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={bukaPreviewPdf}
+              disabled={loading}
+              className="text-xs px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            >
+              👁️ Preview
+            </button>
+            <button
+              type="button"
+              onClick={unduhPdf}
+              disabled={loading || rows.length === 0}
+              className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50"
+            >
+              📄 PDF
+            </button>
+            <button
+              type="button"
+              onClick={unduhExcel}
+              disabled={loading || rows.length === 0}
+              className="text-xs px-3 py-1.5 rounded-lg bg-green-50 text-green-600 hover:bg-green-100 disabled:opacity-50"
+            >
+              📊 Excel
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 text-xl leading-none ml-1"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         {/* Filter periode */}
@@ -190,6 +262,15 @@ export default function ModalRetribusi({ show, onClose, instansiId, petugasId })
           </div>
         )}
 
+        {/* Rekap total (semua transaksi) */}
+        <div className="bg-sky-50 border border-sky-200 rounded-xl p-4 mb-4">
+          <p className="text-xs text-sky-600 font-medium">Total retribusi periode ini (semua transaksi)</p>
+          <p className="text-2xl font-bold text-sky-800">
+            Rp {totalSemua.toLocaleString('id-ID')}
+          </p>
+          <p className="text-xs text-sky-600 mt-0.5">{jumlahSemua} transaksi — termasuk yang sudah disetor</p>
+        </div>
+
         {/* Rekap total & tombol Stor */}
         <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mb-4 flex items-center justify-between flex-wrap gap-3">
           <div>
@@ -209,7 +290,29 @@ export default function ModalRetribusi({ show, onClose, instansiId, petugasId })
           </button>
         </div>
 
-        {/* Rekap per poli */}
+        {/* Rekap per poli — semua transaksi */}
+        <div className="mb-4">
+          <p className="text-sm font-semibold text-gray-700 mb-2">Rekap per Poli (semua transaksi)</p>
+          {rekapPerPoliSemua.length === 0 ? (
+            <p className="text-xs text-gray-400 py-2">Tidak ada transaksi retribusi pada periode ini.</p>
+          ) : (
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              {rekapPerPoliSemua.map((r) => (
+                <div key={r.namaPoli} className="border border-sky-200 bg-sky-50/40 rounded-xl p-3">
+                  <p className="text-sm font-medium text-gray-700 truncate" title={r.namaPoli}>
+                    {r.namaPoli}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">{r.jumlahPasien} pasien</p>
+                  <p className="text-lg font-bold text-sky-700">
+                    Rp {r.total.toLocaleString('id-ID')}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Rekap per poli — hanya belum disetor */}
         <div className="mb-4">
           <p className="text-sm font-semibold text-gray-700 mb-2">Rekap per Poli (belum disetor)</p>
           {rekapPerPoli.length === 0 ? (
@@ -284,6 +387,39 @@ export default function ModalRetribusi({ show, onClose, instansiId, petugasId })
           )}
         </div>
       </div>
+
+      {/* Modal Preview — isi PDF identik dengan hasil download,
+          karena keduanya berasal dari buatPdfLaporanRetribusi(). */}
+      {showPreview && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-3 border-b">
+              <p className="font-semibold text-gray-700 text-sm">Preview Laporan — {labelPeriodeStr}</p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={unduhPdf}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100"
+                >
+                  📄 Download PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={tutupPreview}
+                  className="text-xs px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              {previewUrl && (
+                <iframe src={previewUrl} title="Preview Laporan Retribusi Loket" className="w-full h-full border-0" />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

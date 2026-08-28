@@ -43,7 +43,7 @@ export default function DashboardApoteker() {
     const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single()
     setProfile(data)
     fetchResepMenunggu()
-    fetchObatMasuk()
+    fetchObatMasuk(data?.instansi_id)
   }
 
   async function fetchResepMenunggu() {
@@ -66,12 +66,17 @@ export default function DashboardApoteker() {
     setResepMenunggu(data || [])
   }
 
-  async function fetchObatMasuk() {
-    const { data, error } = await supabase
+  async function fetchObatMasuk(instansiId) {
+    const idInstansi = instansiId || profile?.instansi_id
+    let query = supabase
       .from('obat_masuk')
       .select('*')
       .eq('is_aktif', true)
       .order('nama_obat', { ascending: true })
+
+    if (idInstansi) query = query.eq('instansi_id', idInstansi)
+
+    const { data, error } = await query
 
     if (error) {
       console.error(error)
@@ -174,6 +179,7 @@ export default function DashboardApoteker() {
         stok_minimum: formObat.stok_minimum ? parseInt(formObat.stok_minimum, 10) : 10,
         harga_satuan: formObat.harga_satuan ? parseFloat(formObat.harga_satuan) : null,
         keterangan: formObat.keterangan.trim() || null,
+        is_aktif: true,
       })
       if (err) throw new Error(err.message)
 
@@ -182,7 +188,7 @@ export default function DashboardApoteker() {
         nama_obat: '', kategori: '', satuan: 'tablet', stok: '', stok_minimum: '10', harga_satuan: '', keterangan: '',
       })
       setShowFormObat(false)
-      fetchObatMasuk()
+      fetchObatMasuk(profile?.instansi_id)
     } catch (err) {
       setError(err.message)
     } finally {
