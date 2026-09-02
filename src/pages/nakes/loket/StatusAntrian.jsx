@@ -17,12 +17,17 @@ import { supabase } from '../../../lib/supabaseClient'
    Realtime), karena Realtime Postgres Changes tidak bisa dibatasi
    lewat VIEW — hanya lewat tabel asli, yang RLS-nya sengaja tidak
    dibuka untuk anon supaya data medis tetap aman.
+
+   Halaman juga menampilkan ringkasan per poli (hari yang sama):
+   nomor yang sedang dilayani (status_panggil = 'dipanggil' dengan
+   waktu_panggil terbaru) dan total antrian hari ini.
    ──────────────────────────────────────────────────────────────── */
 
 export default function StatusAntrian() {
   const { id } = useParams()
 
   const [kunjungan, setKunjungan] = useState(null)
+  const [ringkasan, setRingkasan] = useState({ sedangDilayani: null, totalHariIni: null })
   const [loading, setLoading] = useState(true)
   const [errorMsg, setErrorMsg] = useState('')
 
@@ -64,6 +69,36 @@ export default function StatusAntrian() {
         ...data,
         pasien: { nama_lengkap: data.nama_lengkap },
         polis: { nama_poli: data.nama_poli },
+      })
+
+      await fetchRingkasan(data.poli_id, data.tanggal_periksa)
+    }
+
+    async function fetchRingkasan(poliId, tanggal) {
+      if (!poliId || !tanggal) return
+
+      // Nomor yang sedang dilayani: baris dengan status_panggil 'dipanggil'
+      // di poli & tanggal yang sama, ambil yang waktu_panggil-nya paling baru.
+      const { data: dipanggilData } = await supabase
+        .from('status_antrian_publik')
+        .select('nomor_antrian, waktu_panggil')
+        .eq('poli_id', poliId)
+        .eq('tanggal_periksa', tanggal)
+        .eq('status_panggil', 'dipanggil')
+        .order('waktu_panggil', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      // Total antrian hari ini di poli yang sama.
+      const { count } = await supabase
+        .from('status_antrian_publik')
+        .select('id', { count: 'exact', head: true })
+        .eq('poli_id', poliId)
+        .eq('tanggal_periksa', tanggal)
+
+      setRingkasan({
+        sedangDilayani: dipanggilData?.nomor_antrian ?? null,
+        totalHariIni: count ?? null,
       })
     }
 
@@ -137,7 +172,7 @@ export default function StatusAntrian() {
             </p>
 
             <div
-              className="inline-block px-4 py-2 rounded-lg text-sm font-semibold"
+              className="inline-block px-4 py-2 rounded-lg text-sm font-semibold mb-4"
               style={{
                 background: 'var(--bg)',
                 border: `1px solid ${statusColor(kunjungan.status_panggil || kunjungan.status)}`,
@@ -147,7 +182,26 @@ export default function StatusAntrian() {
               {statusLabel(kunjungan.status_panggil || kunjungan.status)}
             </div>
 
-            <p className="text-xs mt-6" style={{ color: 'var(--muted)' }}>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="rounded-lg p-3" style={{ background: 'var(--bg)' }}>
+                <p className="text-[11px] mb-1" style={{ color: 'var(--muted)' }}>
+                  No. antrian sedang dilayani
+                </p>
+                <p className="text-xl font-semibold">
+                  {ringkasan.sedangDilayani ?? '-'}
+                </p>
+              </div>
+              <div className="rounded-lg p-3" style={{ background: 'var(--bg)' }}>
+                <p className="text-[11px] mb-1" style={{ color: 'var(--muted)' }}>
+                  Total antrian hari ini
+                </p>
+                <p className="text-xl font-semibold">
+                  {ringkasan.totalHariIni ?? '-'}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs" style={{ color: 'var(--muted)' }}>
               Halaman ini otomatis diperbarui — tidak perlu di-refresh.
             </p>
           </>
