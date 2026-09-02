@@ -5,15 +5,18 @@ import { supabase } from '../../../lib/supabaseClient'
 /* ────────────────────────────────────────────────────────────────
    HALAMAN PUBLIK — STATUS ANTRIAN (dibuka via scan QR di CekAntrian)
    Route: /status-antrian/:id   (id = kunjungan.id, UUID)
-   Tidak butuh login. Pastikan RLS Supabase mengizinkan SELECT publik
-   (anon) pada tabel `kunjungan` (+ join pasien, polis) terbatas pada
-   kolom yang dipakai di sini, atau gunakan VIEW/RPC khusus agar data
-   sensitif pasien lain tidak ikut ter-expose.
+   Tidak butuh login.
 
-   Sebelumnya halaman ini BELUM ADA sama sekali di project & belum
-   terdaftar di App.jsx, sehingga QR yang di-generate dari
-   CekAntrian.jsx mengarah ke route kosong (blank) saat di-scan.
-   Daftarkan route ini di App.jsx (lihat catatan di bawah file).
+   Data diambil dari VIEW `public.status_antrian_publik` (bukan tabel
+   `kunjungan` langsung), yang hanya expose kolom non-sensitif
+   (nomor antrian, status, nama pasien, nama poli) — TIDAK termasuk
+   data medis (anamnesa, diagnosa, therapy, icd_x, dst). Role anon
+   diberi akses SELECT ke VIEW ini saja, bukan ke tabel aslinya.
+
+   Update status memakai polling tiap 5 detik (bukan Supabase
+   Realtime), karena Realtime Postgres Changes tidak bisa dibatasi
+   lewat VIEW — hanya lewat tabel asli, yang RLS-nya sengaja tidak
+   dibuka untuk anon supaya data medis tetap aman.
    ──────────────────────────────────────────────────────────────── */
 
 export default function StatusAntrian() {
@@ -24,7 +27,7 @@ export default function StatusAntrian() {
   const [errorMsg, setErrorMsg] = useState('')
 
   useEffect(() => {
-    let channel
+    let intervalId
 
     async function init() {
       if (!id) {
@@ -38,38 +41,17 @@ export default function StatusAntrian() {
       await fetchKunjungan()
       setLoading(false)
 
-      channel = supabase
-        .channel(`status-antrian-${id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: 'UPDATE',
-            schema: 'public',
-            table: 'kunjungan',
-            filter: `id=eq.${id}`,
-          },
-          (payload) => {
-            setKunjungan((prev) => ({ ...prev, ...payload.new }))
-          }
-        )
-        .subscribe()
+      // Polling berkala (bukan Realtime) supaya kita hanya perlu membuka akses
+      // publik lewat VIEW terbatas `status_antrian_publik`, tanpa perlu memberi
+      // izin SELECT langsung ke tabel `kunjungan` (yang berisi data medis) untuk
+      // role anon — Realtime Postgres Changes tidak bisa dibatasi lewat VIEW.
+      intervalId = setInterval(fetchKunjungan, 5000)
     }
 
     async function fetchKunjungan() {
       const { data, error } = await supabase
-        .from('kunjungan')
-        .select(
-          `
-          id,
-          nomor_antrian,
-          status,
-          status_panggil,
-          kategori_pasien,
-          tanggal_periksa,
-          pasien:pasien_id ( nama_lengkap ),
-          polis:poli_id ( nama_poli )
-        `
-        )
+        .from('status_antrian_publik')
+        .select('*')
         .eq('id', id)
         .single()
 
@@ -78,13 +60,17 @@ export default function StatusAntrian() {
         return
       }
 
-      setKunjungan(data)
+      setKunjungan({
+        ...data,
+        pasien: { nama_lengkap: data.nama_lengkap },
+        polis: { nama_poli: data.nama_poli },
+      })
     }
 
     init()
 
     return () => {
-      if (channel) supabase.removeChannel(channel)
+      if (intervalId) clearInterval(intervalId)
     }
   }, [id])
 
@@ -170,21 +156,3 @@ export default function StatusAntrian() {
     </div>
   )
 }
-
-/* ────────────────────────────────────────────────────────────────
-   CARA DAFTARKAN ROUTE DI App.jsx:
-
-   1. Import di bagian atas App.jsx (sesuaikan path sesuai lokasi
-      file ini disimpan, contoh jika ditaruh di pages/nakes/loket):
-
-        import StatusAntrian from './pages/nakes/loket/StatusAntrian'
-
-   2. Tambahkan <Route> PUBLIK (di luar ProtectedRoute), boleh
-      diletakkan dekat route publik lain seperti /puskesmas/:kode:
-
-        <Route path="/status-antrian/:id" element={<StatusAntrian />} />
-
-   Setelah itu, value QR di CekAntrian.jsx
-   (`${window.location.origin}/status-antrian/${qrTarget.id}`)
-   akan cocok dengan route ini.
-   ──────────────────────────────────────────────────────────────── */
