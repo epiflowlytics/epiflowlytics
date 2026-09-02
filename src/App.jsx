@@ -30,6 +30,7 @@ import DashboardDokterIGD from './pages/nakes/igd/DashboardDokterIGD'
 import KelolaRakIGD from './pages/nakes/igd/KelolaRakIGD'
 import ProfilPuskesmas from './pages/nakes/skm/ProfilPuskesmas'
 import SettingPuskesmas from './pages/nakes/skm/SettingPuskesmas'
+import StatusAntrian from './pages/nakes/loket/StatusAntrian'
 
 export default function App() {
   return (
@@ -169,6 +170,13 @@ export default function App() {
                 <AntrianDisplay />
               </ProtectedRoute>
             }
+          />
+
+          {/* ── Loket: Status Antrian Pasien (halaman publik dari scan QR) ── */}
+          {/* Tidak butuh login. id = kunjungan.id (UUID), dicek via RLS Supabase. */}
+          <Route
+            path="/status-antrian/:id"
+            element={<StatusAntrian />}
           />
 
           {/* ── SKM: Profil Publik Puskesmas (generik, semua instansi) ── */}

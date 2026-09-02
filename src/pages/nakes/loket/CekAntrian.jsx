@@ -17,6 +17,7 @@ export default function CekAntrian() {
 
   useEffect(() => {
     let channel
+    let cancelled = false
 
     async function init() {
       setLoading(true)
@@ -45,15 +46,20 @@ export default function CekAntrian() {
         return
       }
 
+      if (cancelled) return
+
       const instansiId = profile.instansi_id
       const todayStr = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
 
       await fetchKunjungan(instansiId, todayStr)
+      if (cancelled) return
       setLoading(false)
 
-      // Subscribe realtime ke tabel kunjungan untuk instansi ini
+      // Subscribe realtime ke tabel kunjungan untuk instansi ini.
+      // Nama channel disertai timestamp supaya tidak bentrok kalau efek ini
+      // sempat dijalankan lebih dari sekali (mis. React StrictMode di dev).
       channel = supabase
-        .channel('cek-antrian-kunjungan')
+        .channel(`cek-antrian-kunjungan-${Date.now()}`)
         .on(
           'postgres_changes',
           {
@@ -99,6 +105,7 @@ export default function CekAntrian() {
     init()
 
     return () => {
+      cancelled = true
       if (channel) supabase.removeChannel(channel)
     }
   }, [])
