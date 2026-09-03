@@ -131,77 +131,80 @@ export default function StatusAntrian() {
 
   return (
     <div
-      className="min-h-screen flex items-center justify-center p-6"
+      className="min-h-screen w-full flex flex-col items-center justify-center p-4 sm:p-10"
       style={{ background: 'var(--bg)', color: 'var(--ink)' }}
     >
       <div
-        className="w-full max-w-sm rounded-2xl p-6 text-center"
+        className="w-full flex-1 md:flex-none rounded-3xl p-8 sm:p-16 text-center"
         style={{
           background: 'var(--surface)',
           border: '1px solid var(--line)',
           boxShadow: '0 1px 2px rgba(18,24,27,0.04), 0 8px 24px rgba(18,24,27,0.08)',
         }}
       >
-        <p className="text-sm font-extrabold tracking-tight leading-none mb-6">
+        <p className="text-lg font-extrabold tracking-tight leading-none mb-8">
           <span style={{ color: 'var(--accent)' }}>Epiflow</span>
           <span style={{ color: 'var(--muted)' }}>lytics</span>
         </p>
 
         {loading ? (
-          <p className="text-sm" style={{ color: 'var(--muted)' }}>
+          <p className="text-base" style={{ color: 'var(--muted)' }}>
             Memuat status antrian...
           </p>
         ) : errorMsg ? (
-          <p className="text-sm" style={{ color: '#b91c1c' }}>
+          <p className="text-base" style={{ color: '#b91c1c' }}>
             {errorMsg}
           </p>
         ) : (
           <>
-            <p className="text-xs uppercase tracking-wide mb-1" style={{ color: 'var(--muted)' }}>
+            <p className="text-sm uppercase tracking-wide mb-2" style={{ color: 'var(--muted)' }}>
               Nomor Antrian
             </p>
-            <p className="text-6xl font-bold tabular-nums mb-4">
+            <p
+              className="leading-none font-bold tabular-nums mb-6"
+              style={{ fontSize: 'clamp(6rem, 20vw, 16rem)' }}
+            >
               {kunjungan.nomor_antrian ?? '-'}
             </p>
 
-            <p className="text-base font-semibold mb-1">
+            <p className="text-2xl font-semibold mb-1">
               {kunjungan.pasien?.nama_lengkap || '-'}
             </p>
-            <p className="text-sm mb-4" style={{ color: 'var(--muted)' }}>
+            <p className="text-lg mb-6" style={{ color: 'var(--muted)' }}>
               {kunjungan.polis?.nama_poli || '-'}
             </p>
 
             <div
-              className="inline-block px-4 py-2 rounded-lg text-sm font-semibold mb-4"
+              className="inline-block px-6 py-3 rounded-xl text-lg font-semibold mb-6"
               style={{
                 background: 'var(--bg)',
-                border: `1px solid ${statusColor(kunjungan.status_panggil || kunjungan.status)}`,
+                border: `2px solid ${statusColor(kunjungan.status_panggil || kunjungan.status)}`,
                 color: statusColor(kunjungan.status_panggil || kunjungan.status),
               }}
             >
               {statusLabel(kunjungan.status_panggil || kunjungan.status)}
             </div>
 
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <div className="rounded-lg p-3" style={{ background: 'var(--bg)' }}>
-                <p className="text-[11px] mb-1" style={{ color: 'var(--muted)' }}>
+            <div className="grid grid-cols-2 gap-4 sm:gap-6 mb-6 max-w-2xl mx-auto">
+              <div className="rounded-xl p-5 sm:p-8" style={{ background: 'var(--bg)' }}>
+                <p className="text-sm sm:text-base mb-2" style={{ color: 'var(--muted)' }}>
                   No. antrian sedang dilayani
                 </p>
-                <p className="text-xl font-semibold">
+                <p className="text-4xl sm:text-5xl font-semibold">
                   {ringkasan.sedangDilayani ?? '-'}
                 </p>
               </div>
-              <div className="rounded-lg p-3" style={{ background: 'var(--bg)' }}>
-                <p className="text-[11px] mb-1" style={{ color: 'var(--muted)' }}>
+              <div className="rounded-xl p-5 sm:p-8" style={{ background: 'var(--bg)' }}>
+                <p className="text-sm sm:text-base mb-2" style={{ color: 'var(--muted)' }}>
                   Total antrian hari ini
                 </p>
-                <p className="text-xl font-semibold">
+                <p className="text-4xl sm:text-5xl font-semibold">
                   {ringkasan.totalHariIni ?? '-'}
                 </p>
               </div>
             </div>
 
-            <p className="text-xs" style={{ color: 'var(--muted)' }}>
+            <p className="text-sm" style={{ color: 'var(--muted)' }}>
               Halaman ini otomatis diperbarui — tidak perlu di-refresh.
             </p>
           </>
