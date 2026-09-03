@@ -120,6 +120,36 @@ export default function DashboardLoket() {
     }
   }, [])
 
+  // Kunci tampilan DashboardLoket ke mode desktop, khusus saat halaman ini
+  // aktif (mis. diakses dari HP petugas). Meta viewport dikembalikan ke
+  // pengaturan semula saat komponen ini ditinggalkan, supaya halaman lain
+  // (mis. StatusAntrian yang dibuka pasien) tidak ikut terpengaruh.
+  useEffect(() => {
+    const meta = document.querySelector('meta[name="viewport"]')
+    const kontenAsli = meta ? meta.getAttribute('content') : null
+    let metaDibuatBaru = false
+
+    if (meta) {
+      meta.setAttribute('content', 'width=1024')
+    } else {
+      const metaBaru = document.createElement('meta')
+      metaBaru.name = 'viewport'
+      metaBaru.content = 'width=1024'
+      document.head.appendChild(metaBaru)
+      metaDibuatBaru = true
+    }
+
+    return () => {
+      const metaSaatIni = document.querySelector('meta[name="viewport"]')
+      if (!metaSaatIni) return
+      if (metaDibuatBaru) {
+        metaSaatIni.remove()
+      } else if (kontenAsli !== null) {
+        metaSaatIni.setAttribute('content', kontenAsli)
+      }
+    }
+  }, [])
+
   async function fetchProfile() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
