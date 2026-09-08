@@ -89,14 +89,17 @@ export default function RiwayatPendaftaran({ instansiId, instansi }) {
   }
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <h2 className="font-semibold text-gray-700">Riwayat Pendaftaran</h2>
-        <div className="flex flex-wrap items-center gap-2">
+    <div className="flex flex-col h-full">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2 shrink-0">
+        <h2 className="flex items-center gap-1.5 font-bold text-gray-800">
+          <i className="ti ti-history text-teal-600" style={{ fontSize: '16px' }} aria-hidden="true"></i>
+          Riwayat Pendaftaran
+        </h2>
+        <div className="flex flex-wrap items-center gap-1.5">
           <select
             value={periode}
             onChange={(e) => setPeriode(e.target.value)}
-            className="border rounded-lg px-2 py-1.5 text-xs bg-white"
+            className="border border-gray-200 rounded-lg px-2 py-1 text-[10px] sm:text-xs bg-white text-gray-700"
           >
             {OPSI_PERIODE.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
@@ -109,14 +112,14 @@ export default function RiwayatPendaftaran({ instansiId, instansi }) {
                 type="date"
                 value={customMulai}
                 onChange={(e) => setCustomMulai(e.target.value)}
-                className="border rounded-lg px-2 py-1.5 text-xs"
+                className="border border-gray-200 rounded-lg px-2 py-1 text-[10px] sm:text-xs"
               />
-              <span className="text-xs text-gray-400">s/d</span>
+              <span className="text-[10px] sm:text-xs text-gray-400">s/d</span>
               <input
                 type="date"
                 value={customAkhir}
                 onChange={(e) => setCustomAkhir(e.target.value)}
-                className="border rounded-lg px-2 py-1.5 text-xs"
+                className="border border-gray-200 rounded-lg px-2 py-1 text-[10px] sm:text-xs"
               />
             </>
           )}
@@ -125,73 +128,77 @@ export default function RiwayatPendaftaran({ instansiId, instansi }) {
             type="button"
             onClick={bukaPreviewPdf}
             disabled={loading}
-            className="text-xs px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            className="flex items-center gap-1 text-[10px] sm:text-xs px-2 py-1 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-transform active:scale-95"
           >
-            👁️ Preview
+            <i className="ti ti-eye" style={{ fontSize: '13px' }} aria-hidden="true"></i>
+            <span className="hidden sm:inline">Preview</span>
           </button>
           <button
             type="button"
             onClick={unduhPdf}
             disabled={loading || rows.length === 0}
-            className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50"
+            className="flex items-center gap-1 text-[10px] sm:text-xs px-2 py-1 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-transform active:scale-95"
           >
-            📄 PDF
+            <i className="ti ti-file-type-pdf text-red-500" style={{ fontSize: '13px' }} aria-hidden="true"></i>
+            <span className="hidden sm:inline">Download</span> PDF
           </button>
           <button
             type="button"
             onClick={unduhExcel}
             disabled={loading || rows.length === 0}
-            className="text-xs px-3 py-1.5 rounded-lg bg-green-50 text-green-600 hover:bg-green-100 disabled:opacity-50"
+            className="flex items-center gap-1 text-[10px] sm:text-xs px-2 py-1 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-transform active:scale-95"
           >
-            📊 Excel
+            <i className="ti ti-file-spreadsheet text-green-600" style={{ fontSize: '13px' }} aria-hidden="true"></i>
+            <span className="hidden sm:inline">Download</span> Excel
           </button>
         </div>
       </div>
 
-      <p className="text-xs text-gray-400 mb-3">Periode: {labelPeriodeStr}</p>
+      <p className="text-[10px] sm:text-xs text-gray-400 mb-1.5 shrink-0">Periode: {labelPeriodeStr}</p>
 
       {/* Rekap ringkas */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 mb-4">
-        <div className="bg-gray-50 rounded-xl p-3 text-center">
-          <p className="text-xs text-gray-400">Total</p>
-          <p className="text-xl font-bold text-gray-800">{rekap.total}</p>
+      <div className="hidden sm:grid grid-cols-3 lg:grid-cols-6 gap-1.5 mb-2 shrink-0">
+        <div className="bg-gray-50 rounded-lg p-1.5 text-center">
+          <p className="text-[9px] text-gray-400">Total</p>
+          <p className="text-sm font-bold text-gray-800">{rekap.total}</p>
         </div>
-        <div className="bg-blue-50 rounded-xl p-3 text-center">
-          <p className="text-xs text-blue-400">Laki-laki</p>
-          <p className="text-xl font-bold text-blue-700">{rekap.lakiLaki}</p>
+        <div className="bg-blue-50 rounded-lg p-1.5 text-center">
+          <p className="text-[9px] text-blue-400">Laki-laki</p>
+          <p className="text-sm font-bold text-blue-700">{rekap.lakiLaki}</p>
         </div>
-        <div className="bg-pink-50 rounded-xl p-3 text-center">
-          <p className="text-xs text-pink-400">Perempuan</p>
-          <p className="text-xl font-bold text-pink-700">{rekap.perempuan}</p>
+        <div className="bg-pink-50 rounded-lg p-1.5 text-center">
+          <p className="text-[9px] text-pink-400">Perempuan</p>
+          <p className="text-sm font-bold text-pink-700">{rekap.perempuan}</p>
         </div>
-        <div className="bg-yellow-50 rounded-xl p-3 text-center">
-          <p className="text-xs text-yellow-500">Tak Diketahui</p>
-          <p className="text-xl font-bold text-yellow-700">{rekap.tidakDiketahui}</p>
+        <div className="bg-yellow-50 rounded-lg p-1.5 text-center">
+          <p className="text-[9px] text-yellow-500">Tak Diketahui</p>
+          <p className="text-sm font-bold text-yellow-700">{rekap.tidakDiketahui}</p>
         </div>
-        <div className="bg-red-50 rounded-xl p-3 text-center">
-          <p className="text-xs text-red-400">PD3I</p>
-          <p className="text-xl font-bold text-red-700">{totalPD3I}</p>
+        <div className="bg-red-50 rounded-lg p-1.5 text-center">
+          <p className="text-[9px] text-red-400">PD3I</p>
+          <p className="text-sm font-bold text-red-700">{totalPD3I}</p>
         </div>
-        <div className="bg-orange-50 rounded-xl p-3 text-center">
-          <p className="text-xs text-orange-400">SKDR Alert</p>
-          <p className="text-xl font-bold text-orange-700">{totalSKDR}</p>
+        <div className="bg-orange-50 rounded-lg p-1.5 text-center">
+          <p className="text-[9px] text-orange-400">SKDR Alert</p>
+          <p className="text-sm font-bold text-orange-700">{totalSKDR}</p>
         </div>
       </div>
 
-      {error && <p className="text-xs text-red-500 mb-3">{error}</p>}
+      {error && <p className="text-xs text-red-500 mb-2 shrink-0">{error}</p>}
 
       {/* Tabel daftar pasien */}
       {loading ? (
-        <p className="text-sm text-gray-400">Memuat data...</p>
+        <p className="text-xs text-gray-400">Memuat data...</p>
       ) : rows.length === 0 ? (
-        <p className="text-sm text-gray-400">Tidak ada pendaftaran pada periode ini.</p>
+        <p className="text-xs text-gray-400">Tidak ada pendaftaran pada periode ini.</p>
       ) : (
-        <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
-          <table className="w-full text-sm">
+        <div className="flex-1 min-h-0 overflow-x-auto overflow-y-auto">
+          <table className="w-full text-[11px] sm:text-sm">
             <thead className="sticky top-0 bg-white">
               {/* Baris header 1 — "Umur" merentang 2 kolom (L & P) */}
-              <tr className="text-left text-gray-400 text-xs border-b">
-                <th className="py-1.5 pr-2" rowSpan={2}>No</th>
+              <tr className="text-left text-gray-400 text-[10px] sm:text-xs border-b">
+                <th className="py-1 pr-2" rowSpan={2}>No</th>
+
                 <th className="py-1.5 pr-2" rowSpan={2}>Tanggal</th>
                 <th className="py-1.5 pr-2" rowSpan={2}>Jam</th>
                 <th className="py-1.5 pr-2" rowSpan={2}>No. RM</th>

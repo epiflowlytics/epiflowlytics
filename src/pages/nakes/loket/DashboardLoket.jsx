@@ -1463,20 +1463,20 @@ export default function DashboardLoket() {
             </div>
           )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
 
             {/* ── Kolom kiri: aksi utama ── */}
-            <div className="lg:col-span-2 space-y-6">
+            <div className="xl:col-span-2 space-y-6">
               <div className="bg-white rounded-2xl shadow-sm p-6">
                 <p className="text-gray-600 mb-4 font-medium">Menu loket:</p>
-                <div className="flex flex-wrap gap-6">
+                <div className="grid grid-cols-5 gap-3 sm:gap-6">
                   <button
                     onClick={() => {
                       const url = new URL(window.location.href)
                       url.searchParams.set('view', 'antrian')
                       window.open(url.toString(), '_blank')
                     }}
-                    className="w-40 h-40 rounded-2xl bg-gray-700 hover:bg-gray-800 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition"
+                    className="aspect-square rounded-2xl bg-gray-700 hover:bg-gray-800 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition p-2"
                   >
                     <span className="text-4xl">📺</span>
                     <span className="text-lg font-bold">ANTRIAN</span>
@@ -1484,7 +1484,7 @@ export default function DashboardLoket() {
 
                   <button
                     onClick={() => setStep('cek-antrian')}
-                    className="w-40 h-40 rounded-2xl bg-purple-600 hover:bg-purple-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition"
+                    className="aspect-square rounded-2xl bg-purple-600 hover:bg-purple-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition p-2"
                   >
                     <span className="text-4xl">📱</span>
                     <span className="text-lg font-bold text-center leading-tight">CEK ANTRIAN</span>
@@ -1493,7 +1493,7 @@ export default function DashboardLoket() {
                   {/* Rak Rekam Medis — kelola kode rak sendiri */}
                   <button
                     onClick={() => setShowKelolaRak(true)}
-                    className="w-40 h-40 rounded-2xl bg-amber-600 hover:bg-amber-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition"
+                    className="aspect-square rounded-2xl bg-amber-600 hover:bg-amber-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition p-2"
                   >
                     <span className="text-4xl">🗄️</span>
                     <span className="text-lg font-bold text-center leading-tight">RAK REKAM MEDIS</span>
@@ -1502,7 +1502,7 @@ export default function DashboardLoket() {
                   {/* Retribusi — rekap & setor retribusi pasien umum */}
                   <button
                     onClick={() => setShowModalRetribusi(true)}
-                    className="w-40 h-40 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition"
+                    className="aspect-square rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition p-2"
                   >
                     <span className="text-4xl">💵</span>
                     <span className="text-lg font-bold text-center leading-tight">RETRIBUSI</span>
@@ -1511,7 +1511,7 @@ export default function DashboardLoket() {
                   {/* Logout — keluar dari akun */}
                   <button
                     onClick={() => setShowKonfirmasiLogout(true)}
-                    className="w-40 h-40 rounded-2xl bg-red-600 hover:bg-red-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition"
+                    className="aspect-square rounded-2xl bg-red-600 hover:bg-red-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition p-2"
                   >
                     <span className="text-4xl">🚪</span>
                     <span className="text-lg font-bold text-center leading-tight">LOGOUT</span>
