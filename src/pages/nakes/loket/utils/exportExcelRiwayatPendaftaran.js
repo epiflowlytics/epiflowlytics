@@ -120,6 +120,8 @@ export function downloadExcelRiwayatPendaftaran(rows, instansi, periode, tanggal
     ['Laki-laki', rekap.lakiLaki],
     ['Perempuan', rekap.perempuan],
     ...(rekap.tidakDiketahui > 0 ? [['Tidak Diketahui (JK)', rekap.tidakDiketahui]] : []),
+    ['Umum', rekap.umum],
+    ['BPJS', rekap.bpjs],
     ['PD3I', totalPD3I],
     ['SKDR Alert', totalSKDR],
     [],

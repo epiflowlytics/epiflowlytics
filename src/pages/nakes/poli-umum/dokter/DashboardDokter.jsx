@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../../../lib/supabaseClient'
 import { deteksiPD3I } from './pd3iDetector'
+import RiwayatPendaftaran from '../../loket/RiwayatPendaftaran'
 
 export default function DashboardDokter() {
   const [profile, setProfile] = useState(null)
@@ -63,13 +64,19 @@ export default function DashboardDokter() {
   const [penyakitDipilih, setPenyakitDipilih] = useState([])
   const adalahSKDR = penyakitDipilih.length > 0
 
-  // ─── Alur Lab ─────────────────────────────────────────────
-  // tujuan: 'apotek' (selesai periksa, seperti alur biasa) atau 'lab' (perlu pemeriksaan penunjang)
+  // ─── Alur Lab / Selesai ─────────────────────────────────────
+  // tujuan: 'apotek' (ada resep obat), 'lab' (perlu pemeriksaan penunjang),
+  // atau 'selesai' (konsultasi/surat/rujukan luar/tindakan tanpa obat — langsung pulang)
   const [tujuan, setTujuan] = useState('apotek')
   const [permintaanLabList, setPermintaanLabList] = useState([
     { jenis_pemeriksaan: '', catatan_dokter: '' },
   ])
   const [riwayatHasilLab, setRiwayatHasilLab] = useState([]) // hasil lab kunjungan ini (kalau pasien balik dari lab)
+
+  // Riwayat pemeriksaan pasien pada kunjungan-kunjungan SEBELUMNYA (bukan kunjungan yang sedang aktif)
+  const [riwayatPemeriksaan, setRiwayatPemeriksaan] = useState([])
+  const [riwayatPemeriksaanLoading, setRiwayatPemeriksaanLoading] = useState(false)
+  const [tampilkanSemuaRiwayat, setTampilkanSemuaRiwayat] = useState(false)
 
   function tambahPermintaanLab() {
     setPermintaanLabList((prev) => [...prev, { jenis_pemeriksaan: '', catatan_dokter: '' }])
@@ -97,6 +104,33 @@ export default function DashboardDokter() {
     fetchProfile()
   }, [])
 
+  // Realtime: refetch antrian setiap ada perubahan kunjungan
+  // (mis. pasien pindah poli dari loket -> hilang otomatis dari daftar sini,
+  // atau pasien baru masuk poli ini -> otomatis muncul)
+  useEffect(() => {
+    if (!profile?.poli_id) return
+
+    const channel = supabase
+      .channel(`dashboard-dokter-kunjungan-${profile.poli_id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'kunjungan',
+        },
+        () => {
+          fetchAntrian(profile.poli_id)
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.poli_id])
+
   // Deteksi SKDR realtime: gabungan keluhan_utama (skrining perawat) + Anamnesis + Diagnosis (dokter).
   // Diagnosis paling diandalkan karena wajib diisi (ICD sering kosong), tapi tetap dipantau bersama
   // Anamnesis dan Keluhan Utama supaya sinyal muncul sedini mungkin saat dokter mengetik.
@@ -114,7 +148,7 @@ export default function DashboardDokter() {
     if (!user) return
     const { data } = await supabase
       .from('profiles')
-      .select('*')
+      .select('*, instansi:instansi_id(id, nama, jenis, kota, alamat, telepon, logo_url, nama_pemerintah, nama_dinas, email)')
       .eq('id', user.id)
       .single()
     setProfile(data)
@@ -297,6 +331,11 @@ export default function DashboardDokter() {
     setTujuan('apotek')
     setPermintaanLabList([{ jenis_pemeriksaan: '', catatan_dokter: '' }])
     setRiwayatHasilLab([])
+    setRiwayatPemeriksaan([])
+    setTampilkanSemuaRiwayat(false)
+
+    // Ambil riwayat pemeriksaan pasien ini dari kunjungan-kunjungan sebelumnya
+    fetchRiwayatPemeriksaan(kunjungan.pasien_id, kunjungan.id)
 
     // Ambil data skrining perawat untuk kunjungan ini
     const { data, error } = await supabase
@@ -320,6 +359,39 @@ export default function DashboardDokter() {
     // Kalau pasien ini balik dari lab, ambil hasil pemeriksaan labnya untuk ditampilkan
     if (kunjungan.status === 'hasil_lab_selesai') {
       await fetchHasilLab(kunjungan.id)
+    }
+  }
+
+  // Ambil riwayat pemeriksaan pasien dari kunjungan-kunjungan sebelumnya (poli apa saja),
+  // supaya dokter bisa lihat histori diagnosis/tindakan sebelum memeriksa hari ini.
+  async function fetchRiwayatPemeriksaan(pasienId, kunjunganIdSaatIni) {
+    if (!pasienId) return
+    setRiwayatPemeriksaanLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('pemeriksaan')
+        .select(`
+          id, diagnosis, kode_icd, anamnesis, tindakan, catatan, created_at,
+          kunjungan:kunjungan_id(id, tanggal_periksa, poli:poli_id(nama_poli), pasien_id),
+          dokter:dokter_id(nama_lengkap)
+        `)
+        .eq('kunjungan.pasien_id', pasienId)
+        .order('created_at', { ascending: false })
+        .limit(10)
+
+      if (error) throw error
+
+      // Buang kunjungan yang sedang aktif sekarang & baris tanpa data kunjungan
+      // (bisa terjadi kalau relasi kunjungan sudah terhapus)
+      const riwayat = (data || []).filter(
+        (p) => p.kunjungan && p.kunjungan.id !== kunjunganIdSaatIni
+      )
+      setRiwayatPemeriksaan(riwayat)
+    } catch (err) {
+      console.error('Gagal mengambil riwayat pemeriksaan:', err.message)
+      setRiwayatPemeriksaan([])
+    } finally {
+      setRiwayatPemeriksaanLoading(false)
     }
   }
 
@@ -511,8 +583,18 @@ export default function DashboardDokter() {
         if (updateErr) throw new Error(updateErr.message)
 
         setSukses('lab')
+      } else if (tujuan === 'selesai') {
+        // 3c. Konsultasi/surat/rujukan luar/tindakan tanpa obat -> langsung selesai, tidak lewat apotek/lab
+        const { error: updateErr } = await supabase
+          .from('kunjungan')
+          .update({ status: 'selesai', status_panggil: 'menunggu', waktu_panggil: null })
+          .eq('id', selected.id)
+
+        if (updateErr) throw new Error(updateErr.message)
+
+        setSukses('selesai')
       } else {
-        // 3c. Update status kunjungan -> menunggu_obat (diproses apotek), reset status_panggil
+        // 3d. Update status kunjungan -> menunggu_obat (diproses apotek), reset status_panggil
         const { error: updateErr } = await supabase
           .from('kunjungan')
           .update({ status: 'menunggu_obat', status_panggil: 'menunggu', waktu_panggil: null })
@@ -557,6 +639,11 @@ export default function DashboardDokter() {
         {sukses === 'lab' && (
           <div className="mb-4 bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3 text-sm">
             ✅ Pemeriksaan disimpan, pasien diteruskan ke laboratorium.
+          </div>
+        )}
+        {sukses === 'selesai' && (
+          <div className="mb-4 bg-green-50 border border-green-200 text-green-700 rounded-lg px-4 py-3 text-sm">
+            ✅ Pemeriksaan disimpan, pasien selesai dilayani.
           </div>
         )}
 
@@ -696,6 +783,59 @@ export default function DashboardDokter() {
                     <p className="text-xs text-blue-600">BPJS: {selected.pasien.no_bpjs}</p>
                   )}
                 </div>
+
+                {/* Riwayat Pemeriksaan Sebelumnya */}
+                {riwayatPemeriksaanLoading ? (
+                  <div className="border border-gray-200 rounded-xl p-4 mb-4">
+                    <p className="text-xs text-gray-400">Memuat riwayat pemeriksaan...</p>
+                  </div>
+                ) : riwayatPemeriksaan.length > 0 && (
+                  <div className="border border-indigo-200 bg-indigo-50/50 rounded-xl p-4 mb-4">
+                    <p className="text-sm font-bold text-indigo-700 mb-3">
+                      📋 Riwayat Pemeriksaan Sebelumnya ({riwayatPemeriksaan.length})
+                    </p>
+                    <div className="space-y-2">
+                      {(tampilkanSemuaRiwayat ? riwayatPemeriksaan : riwayatPemeriksaan.slice(0, 3)).map((p) => (
+                        <div key={p.id} className="bg-white rounded-lg p-3 border border-indigo-100">
+                          <div className="flex items-center justify-between mb-1">
+                            <p className="text-xs font-semibold text-gray-500">
+                              {p.kunjungan?.tanggal_periksa
+                                ? new Date(p.kunjungan.tanggal_periksa).toLocaleDateString('id-ID', {
+                                    day: 'numeric', month: 'long', year: 'numeric',
+                                  })
+                                : '-'}
+                              {p.kunjungan?.poli?.nama_poli ? ` • ${p.kunjungan.poli.nama_poli}` : ''}
+                            </p>
+                            {p.dokter?.nama_lengkap && (
+                              <p className="text-[10px] text-gray-400">dr. {p.dokter.nama_lengkap}</p>
+                            )}
+                          </div>
+                          <p className="text-sm text-gray-800">
+                            <span className="font-medium">Diagnosis:</span> {p.diagnosis || '-'}
+                            {p.kode_icd && <span className="text-gray-400"> ({p.kode_icd})</span>}
+                          </p>
+                          {p.anamnesis && (
+                            <p className="text-xs text-gray-500 mt-1">Anamnesis: {p.anamnesis}</p>
+                          )}
+                          {p.tindakan && (
+                            <p className="text-xs text-gray-500 mt-1">Tindakan: {p.tindakan}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    {riwayatPemeriksaan.length > 3 && (
+                      <button
+                        type="button"
+                        onClick={() => setTampilkanSemuaRiwayat((v) => !v)}
+                        className="text-xs text-indigo-600 font-medium mt-3 hover:underline"
+                      >
+                        {tampilkanSemuaRiwayat
+                          ? '▲ Sembunyikan'
+                          : `▼ Lihat ${riwayatPemeriksaan.length - 3} riwayat lainnya`}
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {/* Hasil Laboratorium (kalau pasien ini balik dari lab) */}
                 {riwayatHasilLab.length > 0 && (
@@ -962,7 +1102,23 @@ export default function DashboardDokter() {
                       >
                         🧪 Perlu Lab → Laboratorium
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => setTujuan('selesai')}
+                        className={`flex-1 py-2 rounded-lg border text-sm font-medium transition ${
+                          tujuan === 'selesai'
+                            ? 'bg-emerald-600 text-white border-emerald-600'
+                            : 'bg-white text-gray-600 border-gray-300'
+                        }`}
+                      >
+                        ✅ Selesai / Pulang
+                      </button>
                     </div>
+                    {tujuan === 'selesai' && (
+                      <p className="text-xs text-gray-400 mt-2">
+                        Untuk konsultasi tanpa obat, surat sakit/SKBS, rujukan ke luar, atau tindakan tanpa resep. Pasien langsung dianggap selesai dilayani.
+                      </p>
+                    )}
                   </div>
 
                   {/* PERMINTAAN LAB (muncul kalau tujuan = lab) */}
@@ -1017,7 +1173,8 @@ export default function DashboardDokter() {
                     </div>
                   )}
 
-                  {/* RESEP OBAT */}
+                  {/* RESEP OBAT (disembunyikan kalau tujuan = selesai, karena tidak lewat apotek) */}
+                  {tujuan !== 'selesai' && (
                   <div ref={resepRef} className="border-t pt-4">
                     <div className="flex items-center justify-between mb-2">
                       <label className="block text-sm font-semibold text-gray-800">
@@ -1180,6 +1337,7 @@ export default function DashboardDokter() {
                       })}
                     </div>
                   </div>
+                  )}
 
                   {/* Tombol */}
                   <div className="flex gap-3 pt-2">
@@ -1194,13 +1352,19 @@ export default function DashboardDokter() {
                       type="submit"
                       disabled={loading}
                       className={`flex-1 py-2 rounded-lg text-white text-sm font-semibold disabled:opacity-50 ${
-                        tujuan === 'lab' ? 'bg-teal-600 hover:bg-teal-700' : 'bg-blue-600 hover:bg-blue-700'
+                        tujuan === 'lab'
+                          ? 'bg-teal-600 hover:bg-teal-700'
+                          : tujuan === 'selesai'
+                          ? 'bg-emerald-600 hover:bg-emerald-700'
+                          : 'bg-blue-600 hover:bg-blue-700'
                       }`}
                     >
                       {loading
                         ? 'Menyimpan...'
                         : tujuan === 'lab'
                         ? 'Simpan & Teruskan ke Laboratorium →'
+                        : tujuan === 'selesai'
+                        ? 'Simpan & Selesaikan Kunjungan →'
                         : 'Simpan & Teruskan ke Apotek →'}
                     </button>
                   </div>
@@ -1211,6 +1375,12 @@ export default function DashboardDokter() {
           </div>
 
         </div>
+
+        {/* Riwayat Pendaftaran (rekap semua pasien, filter periode, download PDF/Excel) */}
+        <div className="bg-white rounded-2xl shadow-sm p-5 mt-6" style={{ minHeight: '480px' }}>
+          <RiwayatPendaftaran instansiId={profile?.instansi_id} instansi={profile?.instansi} />
+        </div>
+
       </div>
 
       {/* MODAL POPUP VALIDASI */}

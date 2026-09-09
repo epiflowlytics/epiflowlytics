@@ -14,6 +14,8 @@ export function hitungRekap(rows) {
     lakiLaki: 0,
     perempuan: 0,
     tidakDiketahui: 0,
+    umum: 0,
+    bpjs: 0,
     // Tiap klaster sekarang berupa breakdown { L, P, total } bukan angka tunggal,
     // supaya bisa ditampilkan per jenis kelamin di tabel Klaster Umur.
     klaster: {
@@ -31,6 +33,9 @@ export function hitungRekap(rows) {
     if (jk === 'L') rekap.lakiLaki += 1
     else if (jk === 'P') rekap.perempuan += 1
     else rekap.tidakDiketahui += 1
+
+    if (r.kategori_pasien === 'bpjs') rekap.bpjs += 1
+    else if (r.kategori_pasien === 'umum') rekap.umum += 1
 
     const kategori = kategoriUmur(r.pasien?.tanggal_lahir)
     const label = kategori.label || 'Tidak Diketahui'

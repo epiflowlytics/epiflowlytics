@@ -14,6 +14,12 @@ export default function CekAntrian() {
   const [loading, setLoading] = useState(true)
   const [errorMsg, setErrorMsg] = useState('')
   const [qrTarget, setQrTarget] = useState(null) // baris kunjungan yg lagi ditampilkan QR-nya
+  const [batalTarget, setBatalTarget] = useState(null) // baris kunjungan yg mau dibatalkan
+  const [batalLoading, setBatalLoading] = useState(false)
+  const [poliList, setPoliList] = useState([]) // daftar poli utk dropdown ganti poli
+  const [gantiPoliTarget, setGantiPoliTarget] = useState(null) // baris kunjungan yg mau diganti poli
+  const [selectedPoliId, setSelectedPoliId] = useState('')
+  const [gantiPoliLoading, setGantiPoliLoading] = useState(false)
 
   useEffect(() => {
     let channel
@@ -52,6 +58,7 @@ export default function CekAntrian() {
       const todayStr = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
 
       await fetchKunjungan(instansiId, todayStr)
+      await fetchPoliList(instansiId)
       if (cancelled) return
       setLoading(false)
 
@@ -86,12 +93,14 @@ export default function CekAntrian() {
           status_panggil,
           kategori_pasien,
           tanggal_periksa,
+          poli_id,
           pasien:pasien_id ( no_rekam_medis, nama_lengkap ),
           polis:poli_id ( nama_poli )
         `
         )
         .eq('instansi_id', instansiId)
         .eq('tanggal_periksa', todayStr)
+        .neq('status', 'batal')
         .order('nomor_antrian', { ascending: true })
 
       if (error) {
@@ -102,6 +111,17 @@ export default function CekAntrian() {
       setKunjungan(data || [])
     }
 
+    async function fetchPoliList(instansiId) {
+      const { data, error } = await supabase
+        .from('polis')
+        .select('id, nama_poli')
+        .eq('instansi_id', instansiId)
+        .order('nama_poli', { ascending: true })
+
+      if (error) return
+      setPoliList(data || [])
+    }
+
     init()
 
     return () => {
@@ -109,6 +129,74 @@ export default function CekAntrian() {
       if (channel) supabase.removeChannel(channel)
     }
   }, [])
+
+  async function handleBatalBerobat() {
+    if (!batalTarget) return
+    setBatalLoading(true)
+
+    const { error } = await supabase
+      .from('kunjungan')
+      .update({ status: 'batal', status_panggil: 'batal' })
+      .eq('id', batalTarget.id)
+
+    setBatalLoading(false)
+
+    if (error) {
+      console.error('Gagal membatalkan kunjungan:', error.message, error)
+      setErrorMsg(`Gagal membatalkan kunjungan: ${error.message}`)
+      setBatalTarget(null)
+      return
+    }
+
+    setBatalTarget(null)
+  }
+
+  async function handleGantiPoli() {
+    if (!gantiPoliTarget || !selectedPoliId) return
+    setGantiPoliLoading(true)
+
+    const todayStr = new Date().toISOString().slice(0, 10)
+
+    // Hitung nomor antrian baru di poli tujuan: jumlah kunjungan hari ini
+    // di poli tujuan (instansi yg sama) + 1
+    const { count, error: countError } = await supabase
+      .from('kunjungan')
+      .select('id', { count: 'exact', head: true })
+      .eq('poli_id', selectedPoliId)
+      .eq('tanggal_periksa', todayStr)
+
+    if (countError) {
+      setGantiPoliLoading(false)
+      setErrorMsg('Gagal menghitung nomor antrian poli tujuan.')
+      setGantiPoliTarget(null)
+      setSelectedPoliId('')
+      return
+    }
+
+    const nomorAntrianBaru = (count || 0) + 1
+
+    const { error } = await supabase
+      .from('kunjungan')
+      .update({
+        poli_id: selectedPoliId,
+        nomor_antrian: nomorAntrianBaru,
+        status: 'menunggu',
+        status_panggil: 'menunggu',
+      })
+      .eq('id', gantiPoliTarget.id)
+
+    setGantiPoliLoading(false)
+
+    if (error) {
+      setErrorMsg('Gagal mengganti poli tujuan.')
+      setGantiPoliTarget(null)
+      setSelectedPoliId('')
+      return
+    }
+
+    setGantiPoliTarget(null)
+    setSelectedPoliId('')
+  }
 
   function statusLabel(status) {
     const map = {
@@ -182,13 +270,32 @@ export default function CekAntrian() {
                     <td className="px-4 py-3 font-semibold">{row.nomor_antrian ?? '-'}</td>
                     <td className="px-4 py-3">{statusLabel(row.status_panggil || row.status)}</td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        onClick={() => setQrTarget(row)}
-                        className="px-3 py-1.5 rounded-lg text-white text-xs font-semibold transition"
-                        style={{ background: 'var(--accent)' }}
-                      >
-                        Generate QR
-                      </button>
+                      <div className="flex justify-end gap-2">
+                        <button
+                          onClick={() => setQrTarget(row)}
+                          className="px-3 py-1.5 rounded-lg text-white text-xs font-semibold transition"
+                          style={{ background: 'var(--accent)' }}
+                        >
+                          Generate QR
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedPoliId(row.poli_id || '')
+                            setGantiPoliTarget(row)
+                          }}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold transition"
+                          style={{ background: '#eab308', color: '#1a1a1a' }}
+                        >
+                          Ganti Poli
+                        </button>
+                        <button
+                          onClick={() => setBatalTarget(row)}
+                          className="px-3 py-1.5 rounded-lg text-white text-xs font-semibold transition"
+                          style={{ background: '#dc2626' }}
+                        >
+                          Batal Berobat
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -232,6 +339,109 @@ export default function CekAntrian() {
             >
               Tutup
             </button>
+          </div>
+        </div>
+      )}
+      {batalTarget && (
+        <div
+          className="fixed inset-0 flex items-center justify-center p-4 z-50"
+          style={{ background: 'rgba(18,24,27,0.5)' }}
+          onClick={() => !batalLoading && setBatalTarget(null)}
+        >
+          <div
+            className="rounded-2xl p-6 max-w-xs w-full text-center"
+            style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-bold mb-1">Batalkan Berobat?</h2>
+            <p className="text-sm mb-4" style={{ color: 'var(--muted)' }}>
+              {batalTarget.pasien?.nama_lengkap || '-'} · No. Antrian{' '}
+              <strong>{batalTarget.nomor_antrian ?? '-'}</strong> akan ditandai batal.
+            </p>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setBatalTarget(null)}
+                disabled={batalLoading}
+                className="flex-1 py-2 rounded-lg text-sm font-semibold border transition disabled:opacity-50"
+                style={{ borderColor: 'var(--line)', color: 'var(--ink)' }}
+              >
+                Kembali
+              </button>
+              <button
+                onClick={handleBatalBerobat}
+                disabled={batalLoading}
+                className="flex-1 py-2 rounded-lg text-white text-sm font-semibold transition disabled:opacity-50"
+                style={{ background: '#dc2626' }}
+              >
+                {batalLoading ? 'Memproses...' : 'Ya, Batalkan'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {gantiPoliTarget && (
+        <div
+          className="fixed inset-0 flex items-center justify-center p-4 z-50"
+          style={{ background: 'rgba(18,24,27,0.5)' }}
+          onClick={() => !gantiPoliLoading && setGantiPoliTarget(null)}
+        >
+          <div
+            className="rounded-2xl p-6 max-w-xs w-full text-center"
+            style={{ background: 'var(--surface)', border: '1px solid var(--line)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-bold mb-1">Ganti Poli Tujuan</h2>
+            <p className="text-sm mb-4" style={{ color: 'var(--muted)' }}>
+              {gantiPoliTarget.pasien?.nama_lengkap || '-'} · No. Antrian saat ini{' '}
+              <strong>{gantiPoliTarget.nomor_antrian ?? '-'}</strong>
+            </p>
+            <p className="text-xs mb-4" style={{ color: 'var(--muted)' }}>
+              Pasien akan mendapat nomor antrian baru di poli tujuan dan statusnya direset menjadi menunggu.
+            </p>
+
+            <select
+              value={selectedPoliId}
+              onChange={(e) => setSelectedPoliId(e.target.value)}
+              className="w-full mb-4 px-3 py-2 rounded-lg text-sm outline-none"
+              style={{
+                background: 'var(--bg)',
+                border: '1px solid var(--line)',
+                color: 'var(--ink)',
+              }}
+            >
+              <option value="" disabled>
+                Pilih poli tujuan
+              </option>
+              {poliList.map((poli) => (
+                <option key={poli.id} value={poli.id}>
+                  {poli.nama_poli}
+                </option>
+              ))}
+            </select>
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setGantiPoliTarget(null)}
+                disabled={gantiPoliLoading}
+                className="flex-1 py-2 rounded-lg text-sm font-semibold border transition disabled:opacity-50"
+                style={{ borderColor: 'var(--line)', color: 'var(--ink)' }}
+              >
+                Batal
+              </button>
+              <button
+                onClick={handleGantiPoli}
+                disabled={
+                  gantiPoliLoading ||
+                  !selectedPoliId ||
+                  selectedPoliId === gantiPoliTarget.poli_id
+                }
+                className="flex-1 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50"
+                style={{ background: '#eab308', color: '#1a1a1a' }}
+              >
+                {gantiPoliLoading ? 'Menyimpan...' : 'Simpan'}
+              </button>
+            </div>
           </div>
         </div>
       )}

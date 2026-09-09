@@ -699,6 +699,7 @@ export default function DashboardLoket() {
       `)
       .eq('instansi_id', instansiId)
       .eq('tanggal_periksa', today)
+      .neq('status', 'batal')
       .order('created_at', { ascending: false })
 
     if (error) {
@@ -747,11 +748,39 @@ export default function DashboardLoket() {
     setMonitoringLoket(Object.values(loketMap))
   }, [])
 
-  // Auto-refresh dashboard tiap 30 detik
+  // Auto-refresh dashboard tiap 30 detik (fallback jika realtime terlewat)
   useEffect(() => {
     if (!profile?.instansi_id) return
     const interval = setInterval(() => fetchDashboardData(profile.instansi_id), 30000)
     return () => clearInterval(interval)
+  }, [profile?.instansi_id, fetchDashboardData])
+
+  // Realtime: refresh dashboard segera saat ada perubahan di tabel kunjungan
+  // (mis. pasien dibatalkan / dipanggil / selesai dari CekAntrian atau halaman lain),
+  // supaya tidak perlu menunggu polling 30 detik.
+  useEffect(() => {
+    if (!profile?.instansi_id) return
+
+    const instansiId = profile.instansi_id
+    const channel = supabase
+      .channel(`dashboard-loket-kunjungan-${Date.now()}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'kunjungan',
+          filter: `instansi_id=eq.${instansiId}`,
+        },
+        () => {
+          fetchDashboardData(instansiId)
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
   }, [profile?.instansi_id, fetchDashboardData])
 
   // FITUR 1: pencarian pasien lama (debounce)

@@ -42,6 +42,7 @@ export default function RiwayatPendaftaran({ instansiId, instansi }) {
       .eq('instansi_id', instansiId)
       .gte('tanggal_periksa', mulai)
       .lte('tanggal_periksa', akhir)
+      .neq('status', 'batal')
       .order('tanggal_periksa', { ascending: false })
       .order('created_at', { ascending: false })
 
@@ -157,7 +158,7 @@ export default function RiwayatPendaftaran({ instansiId, instansi }) {
       <p className="text-[10px] sm:text-xs text-gray-400 mb-1.5 shrink-0">Periode: {labelPeriodeStr}</p>
 
       {/* Rekap ringkas */}
-      <div className="hidden sm:grid grid-cols-3 lg:grid-cols-6 gap-1.5 mb-2 shrink-0">
+      <div className="hidden sm:grid grid-cols-4 lg:grid-cols-8 gap-1.5 mb-2 shrink-0">
         <div className="bg-gray-50 rounded-lg p-1.5 text-center">
           <p className="text-[9px] text-gray-400">Total</p>
           <p className="text-sm font-bold text-gray-800">{rekap.total}</p>
@@ -173,6 +174,14 @@ export default function RiwayatPendaftaran({ instansiId, instansi }) {
         <div className="bg-yellow-50 rounded-lg p-1.5 text-center">
           <p className="text-[9px] text-yellow-500">Tak Diketahui</p>
           <p className="text-sm font-bold text-yellow-700">{rekap.tidakDiketahui}</p>
+        </div>
+        <div className="bg-teal-50 rounded-lg p-1.5 text-center">
+          <p className="text-[9px] text-teal-500">Umum</p>
+          <p className="text-sm font-bold text-teal-700">{rekap.umum}</p>
+        </div>
+        <div className="bg-indigo-50 rounded-lg p-1.5 text-center">
+          <p className="text-[9px] text-indigo-400">BPJS</p>
+          <p className="text-sm font-bold text-indigo-700">{rekap.bpjs}</p>
         </div>
         <div className="bg-red-50 rounded-lg p-1.5 text-center">
           <p className="text-[9px] text-red-400">PD3I</p>

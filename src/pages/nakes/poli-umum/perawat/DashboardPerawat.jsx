@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../../../lib/supabaseClient'
+import RiwayatPendaftaran from '../../loket/RiwayatPendaftaran'
 
 export default function DashboardPerawat() {
   const [profile, setProfile] = useState(null)
@@ -9,6 +10,10 @@ export default function DashboardPerawat() {
   const [error, setError] = useState('')
   const [sukses, setSukses] = useState(false)
   const [loadingPanggil, setLoadingPanggil] = useState(false)
+
+  const [riwayatPemeriksaan, setRiwayatPemeriksaan] = useState([])
+  const [riwayatPemeriksaanLoading, setRiwayatPemeriksaanLoading] = useState(false)
+  const [tampilkanSemuaRiwayat, setTampilkanSemuaRiwayat] = useState(false)
 
   const [form, setForm] = useState({
     tekanan_darah: '',
@@ -23,12 +28,39 @@ export default function DashboardPerawat() {
     fetchProfile()
   }, [])
 
+  // Realtime: refetch antrian setiap ada perubahan kunjungan di poli ini
+  // (mis. pasien pindah poli dari loket -> hilang otomatis dari daftar sini,
+  // atau pasien baru masuk poli ini -> otomatis muncul)
+  useEffect(() => {
+    if (!profile?.poli_id) return
+
+    const channel = supabase
+      .channel(`dashboard-perawat-kunjungan-${profile.poli_id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'kunjungan',
+        },
+        () => {
+          fetchAntrian(profile.poli_id)
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.poli_id])
+
   async function fetchProfile() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
     const { data } = await supabase
       .from('profiles')
-      .select('*')
+      .select('*, instansi:instansi_id(id, nama, jenis, kota, alamat, telepon, logo_url, nama_pemerintah, nama_dinas, email)')
       .eq('id', user.id)
       .single()
     setProfile(data)
@@ -187,6 +219,44 @@ export default function DashboardPerawat() {
     })
     setError('')
     setSukses(false)
+    setRiwayatPemeriksaan([])
+    setTampilkanSemuaRiwayat(false)
+
+    // Ambil riwayat pemeriksaan pasien ini dari kunjungan-kunjungan sebelumnya
+    fetchRiwayatPemeriksaan(kunjungan.pasien_id, kunjungan.id)
+  }
+
+  // Ambil riwayat pemeriksaan pasien dari kunjungan-kunjungan sebelumnya (poli apa saja),
+  // supaya perawat bisa lihat histori diagnosis/tindakan sebelum skrining hari ini.
+  async function fetchRiwayatPemeriksaan(pasienId, kunjunganIdSaatIni) {
+    if (!pasienId) return
+    setRiwayatPemeriksaanLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('pemeriksaan')
+        .select(`
+          id, diagnosis, kode_icd, anamnesis, tindakan, catatan, created_at,
+          kunjungan:kunjungan_id(id, tanggal_periksa, poli:poli_id(nama_poli), pasien_id),
+          dokter:dokter_id(nama_lengkap)
+        `)
+        .eq('kunjungan.pasien_id', pasienId)
+        .order('created_at', { ascending: false })
+        .limit(10)
+
+      if (error) throw error
+
+      // Buang kunjungan yang sedang aktif sekarang & baris tanpa data kunjungan
+      // (bisa terjadi kalau relasi kunjungan sudah terhapus)
+      const riwayat = (data || []).filter(
+        (p) => p.kunjungan && p.kunjungan.id !== kunjunganIdSaatIni
+      )
+      setRiwayatPemeriksaan(riwayat)
+    } catch (err) {
+      console.error('Gagal mengambil riwayat pemeriksaan:', err.message)
+      setRiwayatPemeriksaan([])
+    } finally {
+      setRiwayatPemeriksaanLoading(false)
+    }
   }
 
   async function handleSubmit(e) {
@@ -393,6 +463,59 @@ export default function DashboardPerawat() {
                   )}
                 </div>
 
+                {/* Riwayat Pemeriksaan Sebelumnya */}
+                {riwayatPemeriksaanLoading ? (
+                  <div className="border border-gray-200 rounded-xl p-4 mb-4">
+                    <p className="text-xs text-gray-400">Memuat riwayat pemeriksaan...</p>
+                  </div>
+                ) : riwayatPemeriksaan.length > 0 && (
+                  <div className="border border-indigo-200 bg-indigo-50/50 rounded-xl p-4 mb-4">
+                    <p className="text-sm font-bold text-indigo-700 mb-3">
+                      📋 Riwayat Pemeriksaan Sebelumnya ({riwayatPemeriksaan.length})
+                    </p>
+                    <div className="space-y-2">
+                      {(tampilkanSemuaRiwayat ? riwayatPemeriksaan : riwayatPemeriksaan.slice(0, 3)).map((p) => (
+                        <div key={p.id} className="bg-white rounded-lg p-3 border border-indigo-100">
+                          <div className="flex items-center justify-between mb-1">
+                            <p className="text-xs font-semibold text-gray-500">
+                              {p.kunjungan?.tanggal_periksa
+                                ? new Date(p.kunjungan.tanggal_periksa).toLocaleDateString('id-ID', {
+                                    day: 'numeric', month: 'long', year: 'numeric',
+                                  })
+                                : '-'}
+                              {p.kunjungan?.poli?.nama_poli ? ` • ${p.kunjungan.poli.nama_poli}` : ''}
+                            </p>
+                            {p.dokter?.nama_lengkap && (
+                              <p className="text-[10px] text-gray-400">dr. {p.dokter.nama_lengkap}</p>
+                            )}
+                          </div>
+                          <p className="text-sm text-gray-800">
+                            <span className="font-medium">Diagnosis:</span> {p.diagnosis || '-'}
+                            {p.kode_icd && <span className="text-gray-400"> ({p.kode_icd})</span>}
+                          </p>
+                          {p.anamnesis && (
+                            <p className="text-xs text-gray-500 mt-1">Anamnesis: {p.anamnesis}</p>
+                          )}
+                          {p.tindakan && (
+                            <p className="text-xs text-gray-500 mt-1">Tindakan: {p.tindakan}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    {riwayatPemeriksaan.length > 3 && (
+                      <button
+                        type="button"
+                        onClick={() => setTampilkanSemuaRiwayat((v) => !v)}
+                        className="text-xs text-indigo-600 font-medium mt-3 hover:underline"
+                      >
+                        {tampilkanSemuaRiwayat
+                          ? '▲ Sembunyikan'
+                          : `▼ Lihat ${riwayatPemeriksaan.length - 3} riwayat lainnya`}
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {error && (
                   <div className="mb-4 bg-red-50 border border-red-200 text-red-600 rounded-lg px-4 py-3 text-sm">
                     {error}
@@ -516,6 +639,12 @@ export default function DashboardPerawat() {
           </div>
 
         </div>
+
+        {/* Riwayat Pendaftaran (rekap semua pasien, filter periode, download PDF/Excel) */}
+        <div className="bg-white rounded-2xl shadow-sm p-5 mt-6" style={{ minHeight: '480px' }}>
+          <RiwayatPendaftaran instansiId={profile?.instansi_id} instansi={profile?.instansi} />
+        </div>
+
       </div>
     </div>
   )

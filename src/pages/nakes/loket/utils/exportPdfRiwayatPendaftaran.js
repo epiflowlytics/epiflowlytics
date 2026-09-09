@@ -91,6 +91,8 @@ export function buatPdfLaporanRiwayatPendaftaran(rows, instansi, periode, tangga
     ['Perempuan', String(rekap.perempuan)],
   ]
   if (rekap.tidakDiketahui > 0) tabelRingkasan.push(['Tidak Diketahui', String(rekap.tidakDiketahui)])
+  tabelRingkasan.push(['Umum', String(rekap.umum)])
+  tabelRingkasan.push(['BPJS', String(rekap.bpjs)])
 
   const totalPD3I = rows.filter((r) => cekPD3I(r.pemeriksaan)).length
   const totalSKDR = rows.filter((r) => cekSKDR(r.pemeriksaan)).length
