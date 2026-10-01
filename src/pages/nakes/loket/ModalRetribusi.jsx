@@ -169,16 +169,25 @@ export default function ModalRetribusi({ show, onClose, instansiId, instansi, pe
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+      className="fixed inset-x-0 top-0 z-40 bg-black/50 flex items-center justify-center sm:inset-0 sm:p-4 sm:!bottom-0"
+      style={{ bottom: 'calc(60px + env(safe-area-inset-bottom))' }}
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto p-6"
+        className="bg-white sm:rounded-2xl shadow-xl w-full h-full sm:h-auto sm:max-w-3xl sm:max-h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-bold text-gray-800">💵 Retribusi Loket</h2>
-          <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 shrink-0 border-b border-gray-200">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Kembali"
+            className="sm:hidden shrink-0 p-1.5 -ml-1.5 rounded-lg text-gray-500 touch-manipulation"
+          >
+            <i className="ti ti-arrow-left text-lg" aria-hidden="true"></i>
+          </button>
+          <h2 className="text-base sm:text-lg font-bold text-gray-800 flex-1 sm:flex-none">💵 Retribusi Loket</h2>
+          <div className="hidden sm:flex items-center gap-2 ml-auto">
             <button
               type="button"
               onClick={bukaPreviewPdf}
@@ -212,6 +221,39 @@ export default function ModalRetribusi({ show, onClose, instansiId, instansi, pe
             </button>
           </div>
         </div>
+
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6">
+
+        {/* Tombol aksi (Preview/PDF/Excel) — khusus mobile, ditumpuk penuh
+            lebar di bawah header supaya tidak padat berjejer seperti di
+            desktop. Fungsinya sama persis dengan tombol header desktop. */}
+        <div className="sm:hidden grid grid-cols-3 gap-2 mb-4">
+          <button
+            type="button"
+            onClick={bukaPreviewPdf}
+            disabled={loading}
+            className="text-xs px-2 py-2 rounded-lg border border-gray-300 text-gray-600 disabled:opacity-50 touch-manipulation"
+          >
+            👁️ Preview
+          </button>
+          <button
+            type="button"
+            onClick={unduhPdf}
+            disabled={loading || rows.length === 0}
+            className="text-xs px-2 py-2 rounded-lg bg-red-50 text-red-600 disabled:opacity-50 touch-manipulation"
+          >
+            📄 PDF
+          </button>
+          <button
+            type="button"
+            onClick={unduhExcel}
+            disabled={loading || rows.length === 0}
+            className="text-xs px-2 py-2 rounded-lg bg-green-50 text-green-600 disabled:opacity-50 touch-manipulation"
+          >
+            📊 Excel
+          </button>
+        </div>
+
 
         {/* Filter periode */}
         <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -342,75 +384,126 @@ export default function ModalRetribusi({ show, onClose, instansiId, instansi, pe
           ) : rows.length === 0 ? (
             <p className="text-xs text-gray-400 py-4 text-center">Belum ada transaksi retribusi pada periode ini.</p>
           ) : (
-            <div className="overflow-x-auto border rounded-xl">
-              <table className="w-full text-xs">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="text-left px-3 py-2 font-medium text-gray-500">Tanggal</th>
-                    <th className="text-left px-3 py-2 font-medium text-gray-500">Nama</th>
-                    <th className="text-left px-3 py-2 font-medium text-gray-500">No. RM</th>
-                    <th className="text-left px-3 py-2 font-medium text-gray-500">Poli</th>
-                    <th className="text-right px-3 py-2 font-medium text-gray-500">Nominal</th>
-                    <th className="text-center px-3 py-2 font-medium text-gray-500">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {rows.map((r) => (
-                    <tr key={r.id}>
-                      <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
+            <>
+              {/* ── Tampilan kartu — layar kecil (HP) ── */}
+              <div className="sm:hidden space-y-2">
+                {rows.map((r) => (
+                  <div key={r.id} className="border rounded-xl p-3">
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-700 truncate">
+                          {r.kunjungan?.pasien?.nama_lengkap || '-'}
+                        </p>
+                        <p className="text-xs text-gray-400 mt-0.5">
+                          No. RM {r.kunjungan?.pasien?.no_rekam_medis || '-'}
+                        </p>
+                      </div>
+                      {r.disetor ? (
+                        <span className="shrink-0 inline-block px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-[11px] font-medium whitespace-nowrap">
+                          Sudah disetor
+                        </span>
+                      ) : (
+                        <span className="shrink-0 inline-block px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[11px] font-medium whitespace-nowrap">
+                          Belum
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-gray-500 mb-1">
+                      <span>{r.kunjungan?.poli?.nama_poli || '-'}</span>
+                      <span>
                         {r.kunjungan?.tanggal_periksa
                           ? new Date(r.kunjungan.tanggal_periksa).toLocaleDateString('id-ID')
                           : '-'}
-                      </td>
-                      <td className="px-3 py-2 text-gray-700">{r.kunjungan?.pasien?.nama_lengkap || '-'}</td>
-                      <td className="px-3 py-2 text-gray-500">{r.kunjungan?.pasien?.no_rekam_medis || '-'}</td>
-                      <td className="px-3 py-2 text-gray-500">{r.kunjungan?.poli?.nama_poli || '-'}</td>
-                      <td className="px-3 py-2 text-right text-gray-700 font-medium whitespace-nowrap">
-                        Rp {Number(r.nominal || 0).toLocaleString('id-ID')}
-                      </td>
-                      <td className="px-3 py-2 text-center">
-                        {r.disetor ? (
-                          <span className="inline-block px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-[11px] font-medium">
-                            Sudah Distor
-                          </span>
-                        ) : (
-                          <span className="inline-block px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[11px] font-medium">
-                            Belum
-                          </span>
-                        )}
-                      </td>
+                      </span>
+                    </div>
+                    <p className="text-right text-sm font-semibold text-gray-800">
+                      Rp {Number(r.nominal || 0).toLocaleString('id-ID')}
+                    </p>
+                  </div>
+                ))}
+              </div>
+
+              {/* ── Tampilan tabel — layar besar (desktop/tablet) ── */}
+              <div className="hidden sm:block overflow-x-auto border rounded-xl">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-medium text-gray-500">Tanggal</th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-500">Nama</th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-500">No. RM</th>
+                      <th className="text-left px-3 py-2 font-medium text-gray-500">Poli</th>
+                      <th className="text-right px-3 py-2 font-medium text-gray-500">Nominal</th>
+                      <th className="text-center px-3 py-2 font-medium text-gray-500">Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y">
+                    {rows.map((r) => (
+                      <tr key={r.id}>
+                        <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
+                          {r.kunjungan?.tanggal_periksa
+                            ? new Date(r.kunjungan.tanggal_periksa).toLocaleDateString('id-ID')
+                            : '-'}
+                        </td>
+                        <td className="px-3 py-2 text-gray-700">{r.kunjungan?.pasien?.nama_lengkap || '-'}</td>
+                        <td className="px-3 py-2 text-gray-500">{r.kunjungan?.pasien?.no_rekam_medis || '-'}</td>
+                        <td className="px-3 py-2 text-gray-500">{r.kunjungan?.poli?.nama_poli || '-'}</td>
+                        <td className="px-3 py-2 text-right text-gray-700 font-medium whitespace-nowrap">
+                          Rp {Number(r.nominal || 0).toLocaleString('id-ID')}
+                        </td>
+                        <td className="px-3 py-2 text-center">
+                          {r.disetor ? (
+                            <span className="inline-block px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-[11px] font-medium">
+                              Sudah Distor
+                            </span>
+                          ) : (
+                            <span className="inline-block px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[11px] font-medium">
+                              Belum
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
+        </div>
         </div>
       </div>
 
       {/* Modal Preview — isi PDF identik dengan hasil download,
           karena keduanya berasal dari buatPdfLaporanRetribusi(). */}
       {showPreview && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between px-5 py-3 border-b">
-              <p className="font-semibold text-gray-700 text-sm">Preview Laporan — {labelPeriodeStr}</p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={unduhPdf}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100"
-                >
-                  📄 Download PDF
-                </button>
-                <button
-                  type="button"
-                  onClick={tutupPreview}
-                  className="text-xs px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50"
-                >
-                  Tutup
-                </button>
-              </div>
+        <div
+          className="fixed inset-x-0 top-0 z-50 bg-black/50 flex items-center justify-center sm:inset-0 sm:p-4 sm:!bottom-0"
+          style={{ bottom: 'calc(60px + env(safe-area-inset-bottom))' }}
+        >
+          <div className="bg-white sm:rounded-2xl shadow-xl w-full h-full sm:h-[85vh] sm:max-w-5xl flex flex-col">
+            <div className="flex items-center gap-2 px-4 sm:px-5 py-3 border-b shrink-0">
+              <button
+                type="button"
+                onClick={tutupPreview}
+                aria-label="Kembali"
+                className="sm:hidden shrink-0 p-1.5 -ml-1.5 rounded-lg text-gray-500 touch-manipulation"
+              >
+                <i className="ti ti-arrow-left text-lg" aria-hidden="true"></i>
+              </button>
+              <p className="font-semibold text-gray-700 text-sm flex-1 truncate">Preview Laporan — {labelPeriodeStr}</p>
+              <button
+                type="button"
+                onClick={unduhPdf}
+                className="text-xs px-3 py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 shrink-0"
+              >
+                📄 <span className="hidden sm:inline">Download PDF</span>
+              </button>
+              <button
+                type="button"
+                onClick={tutupPreview}
+                className="hidden sm:block text-xs px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 shrink-0"
+              >
+                Tutup
+              </button>
             </div>
             <div className="flex-1 overflow-hidden">
               {previewUrl && (

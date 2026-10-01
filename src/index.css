@@ -24,6 +24,16 @@ html, body, #root {
   height: 100%;
 }
 
+/* Sembunyikan scrollbar secara visual — halaman tetap bisa di-scroll */
+html {
+  scrollbar-width: none;      /* Firefox */
+  -ms-overflow-style: none;   /* IE / Edge lama */
+}
+
+html::-webkit-scrollbar {
+  display: none;              /* Chrome, Safari, Edge berbasis Webkit */
+}
+
 body {
   margin: 0;
   font-family: var(--font-body);
@@ -48,4 +58,20 @@ body {
 .pulse-line path {
   stroke-dasharray: 340;
   animation: draw-pulse 1.1s ease-out forwards;
+}
+
+@keyframes ripple-anim {
+  from {
+    transform: scale(0);
+    opacity: 1;
+  }
+  to {
+    transform: scale(1);
+    opacity: 0;
+  }
+}
+
+.pulse-line-loading path {
+  stroke-dasharray: 340;
+  animation: draw-pulse 1.1s ease-out infinite;
 }

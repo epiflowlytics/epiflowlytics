@@ -2,6 +2,13 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../../../lib/supabaseClient'
 import { deteksiPD3I } from './pd3iDetector'
 import RiwayatPendaftaran from '../../loket/RiwayatPendaftaran'
+import { useConsentPoli } from '../../../consent/useConsentPoli'
+import KartuConsentPoli from '../../../consent/KartuConsentPoli'
+// LembarResep.jsx disimpan di src/pages/nakes/apotek/ (dipakai bersama oleh dokter & apoteker)
+import ModalLembarResep from '../../apotek/LembarResep'
+// Catatan path: DashboardDokter.jsx ada di src/pages/nakes/dokter/, sejajar
+// dengan src/pages/nakes/loket/ — folder consent/ tetap satu tempat di
+// loket/consent/ dan dipakai bersama (reusable) oleh dokter & perawat.
 
 export default function DashboardDokter() {
   const [profile, setProfile] = useState(null)
@@ -20,6 +27,8 @@ export default function DashboardDokter() {
   const tujuanRef = useRef(null)
   const labRef = useRef(null)
   const resepRef = useRef(null)
+
+  const consentPoli = useConsentPoli(profile)
 
   function tampilkanError(message, field = null) {
     setError(message)
@@ -60,6 +69,10 @@ export default function DashboardDokter() {
     },
   ])
 
+  // Pratinjau/cetak lembar resep. Checklist Telaah Resep & Informasi Obat
+  // diisi oleh apoteker di DashboardApoteker (di sini tabelnya tercetak kosong).
+  const [tampilLembarResep, setTampilLembarResep] = useState(false)
+
   const [skdrTerdeteksi, setSkdrTerdeteksi] = useState([])
   const [penyakitDipilih, setPenyakitDipilih] = useState([])
   const adalahSKDR = penyakitDipilih.length > 0
@@ -77,6 +90,12 @@ export default function DashboardDokter() {
   const [riwayatPemeriksaan, setRiwayatPemeriksaan] = useState([])
   const [riwayatPemeriksaanLoading, setRiwayatPemeriksaanLoading] = useState(false)
   const [tampilkanSemuaRiwayat, setTampilkanSemuaRiwayat] = useState(false)
+
+  // Riwayat kesehatan pasien (alergi obat & riwayat penyakit) — disimpan di tabel pasien,
+  // bisa dilihat & diedit oleh perawat, dokter, maupun apoteker.
+  const [editRiwayatKesehatan, setEditRiwayatKesehatan] = useState(false)
+  const [riwayatKesehatanForm, setRiwayatKesehatanForm] = useState({ alergi_obat: '', riwayat_penyakit: '' })
+  const [loadingRiwayatKesehatan, setLoadingRiwayatKesehatan] = useState(false)
 
   function tambahPermintaanLab() {
     setPermintaanLabList((prev) => [...prev, { jenis_pemeriksaan: '', catatan_dokter: '' }])
@@ -161,6 +180,7 @@ export default function DashboardDokter() {
       .from('kunjungan')
       .select(`
         *,
+        poli:poli_id(nama_poli),
         pasien:pasien_id(
           nama_lengkap,
           tanggal_lahir,
@@ -175,7 +195,9 @@ export default function DashboardDokter() {
           status_keluarga,
           status_keluarga_lainnya,
           pekerjaan,
-          alamat
+          alamat,
+          alergi_obat,
+          riwayat_penyakit
         )
       `)
       // 'menunggu_dokter' = pasien baru dari perawat, 'hasil_lab_selesai' = pasien balik dari lab
@@ -327,15 +349,31 @@ export default function DashboardDokter() {
       keperluan_skbs: '',
       catatan: '',
     })
-    setResepList([{ nama_obat: '', dosis: '', aturan_pakai: '', catatan: '', obat_id: '' }])
+    setResepList([{
+      nama_obat: '', dosis: '', aturan_pakai: '', catatan: '', obat_id: '',
+      jumlah: '', satuan_jumlah: 'tablet',
+      bentuk_sediaan: 'utuh', jumlah_puyer: '',
+    }])
+    setTampilLembarResep(false)
     setTujuan('apotek')
     setPermintaanLabList([{ jenis_pemeriksaan: '', catatan_dokter: '' }])
     setRiwayatHasilLab([])
     setRiwayatPemeriksaan([])
     setTampilkanSemuaRiwayat(false)
 
+    // Riwayat kesehatan (alergi obat & riwayat penyakit) sudah ikut terbawa dari data antrian
+    setEditRiwayatKesehatan(false)
+    setRiwayatKesehatanForm({
+      alergi_obat: kunjungan.pasien?.alergi_obat || '',
+      riwayat_penyakit: kunjungan.pasien?.riwayat_penyakit || '',
+    })
+
     // Ambil riwayat pemeriksaan pasien ini dari kunjungan-kunjungan sebelumnya
     fetchRiwayatPemeriksaan(kunjungan.pasien_id, kunjungan.id)
+
+    // Cek apakah pasien ini punya consent aktif (belum selesai) untuk ditampilkan
+    // sebagai kartu status di Info Pasien / tombol TTD petugas
+    consentPoli.muatConsentPasien(kunjungan.pasien_id)
 
     // Ambil data skrining perawat untuk kunjungan ini
     const { data, error } = await supabase
@@ -392,6 +430,47 @@ export default function DashboardDokter() {
       setRiwayatPemeriksaan([])
     } finally {
       setRiwayatPemeriksaanLoading(false)
+    }
+  }
+
+  function handleRiwayatKesehatanChange(e) {
+    const { name, value } = e.target
+    setRiwayatKesehatanForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  async function simpanRiwayatKesehatan() {
+    if (!selected?.pasien_id) return
+    setLoadingRiwayatKesehatan(true)
+    setError('')
+    try {
+      const { error: err } = await supabase
+        .from('pasien')
+        .update({
+          alergi_obat: riwayatKesehatanForm.alergi_obat.trim() || null,
+          riwayat_penyakit: riwayatKesehatanForm.riwayat_penyakit.trim() || null,
+        })
+        .eq('id', selected.pasien_id)
+
+      if (err) throw new Error(err.message)
+
+      setSelected((prev) => prev && ({
+        ...prev,
+        pasien: {
+          ...prev.pasien,
+          alergi_obat: riwayatKesehatanForm.alergi_obat.trim() || null,
+          riwayat_penyakit: riwayatKesehatanForm.riwayat_penyakit.trim() || null,
+        },
+      }))
+      setAntrian((prev) => prev.map((k) => (
+        k.id === selected.id
+          ? { ...k, pasien: { ...k.pasien, alergi_obat: riwayatKesehatanForm.alergi_obat.trim() || null, riwayat_penyakit: riwayatKesehatanForm.riwayat_penyakit.trim() || null } }
+          : k
+      )))
+      setEditRiwayatKesehatan(false)
+    } catch (err) {
+      tampilkanError(err.message)
+    } finally {
+      setLoadingRiwayatKesehatan(false)
     }
   }
 
@@ -607,7 +686,7 @@ export default function DashboardDokter() {
 
       setSelected(null)
       setSkrining(null)
-      setPd3iTerdeteksi([])
+      setSkdrTerdeteksi([])
       setPenyakitDipilih([])
       setRiwayatHasilLab([])
       fetchAntrian(profile.poli_id)
@@ -781,6 +860,99 @@ export default function DashboardDokter() {
                   )}
                   {selected.kategori_pasien === 'bpjs' && (
                     <p className="text-xs text-blue-600">BPJS: {selected.pasien.no_bpjs}</p>
+                  )}
+                </div>
+
+                {/* Status Consent / Persetujuan Tindakan */}
+                <KartuConsentPoli
+                  consent={consentPoli.consentAktif}
+                  consentTuntas={consentPoli.consentTuntas}
+                  loading={consentPoli.loadingConsent}
+                  showTtdPetugas={consentPoli.showTtdPetugas}
+                  menyimpanTtd={consentPoli.menyimpanTtd}
+                  errorConsent={consentPoli.errorConsent}
+                  namaPetugasDefault={profile?.nama_lengkap}
+                  onBukaTtd={consentPoli.bukaTtdPetugas}
+                  onTutupTtd={consentPoli.tutupTtdPetugas}
+                  onSimpanTtd={consentPoli.simpanTtdPetugas}
+                />
+
+                {/* Alergi Obat & Riwayat Penyakit */}
+                <div className="border border-red-200 bg-red-50/50 rounded-xl p-4 mb-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-sm font-bold text-red-700">⚠️ Alergi Obat & Riwayat Penyakit</p>
+                    {!editRiwayatKesehatan && (
+                      <button
+                        type="button"
+                        onClick={() => setEditRiwayatKesehatan(true)}
+                        className="text-xs text-red-600 font-medium hover:underline"
+                      >
+                        ✏️ Edit
+                      </button>
+                    )}
+                  </div>
+
+                  {editRiwayatKesehatan ? (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Alergi Obat</label>
+                        <textarea
+                          name="alergi_obat"
+                          value={riwayatKesehatanForm.alergi_obat}
+                          onChange={handleRiwayatKesehatanChange}
+                          rows={2}
+                          placeholder="Tuliskan alergi obat pasien (mis. Amoxicillin, Paracetamol)..."
+                          className="w-full border rounded-lg px-3 py-2 text-sm resize-none bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Riwayat Penyakit</label>
+                        <textarea
+                          name="riwayat_penyakit"
+                          value={riwayatKesehatanForm.riwayat_penyakit}
+                          onChange={handleRiwayatKesehatanChange}
+                          rows={2}
+                          placeholder="Tuliskan riwayat penyakit pasien (mis. Hipertensi, Diabetes)..."
+                          className="w-full border rounded-lg px-3 py-2 text-sm resize-none bg-white"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditRiwayatKesehatan(false)
+                            setRiwayatKesehatanForm({
+                              alergi_obat: selected.pasien?.alergi_obat || '',
+                              riwayat_penyakit: selected.pasien?.riwayat_penyakit || '',
+                            })
+                          }}
+                          className="flex-1 py-1.5 rounded-lg border border-gray-300 text-gray-600 text-xs hover:bg-gray-50"
+                        >
+                          Batal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={simpanRiwayatKesehatan}
+                          disabled={loadingRiwayatKesehatan}
+                          className="flex-1 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold disabled:opacity-50"
+                        >
+                          {loadingRiwayatKesehatan ? 'Menyimpan...' : 'Simpan'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-sm text-gray-800">
+                        <span className="font-medium">Alergi Obat:</span>{' '}
+                        {selected.pasien?.alergi_obat
+                          ? <span className="text-red-700 font-semibold">{selected.pasien.alergi_obat}</span>
+                          : <span className="text-gray-400">Tidak ada data</span>}
+                      </p>
+                      <p className="text-sm text-gray-800">
+                        <span className="font-medium">Riwayat Penyakit:</span>{' '}
+                        {selected.pasien?.riwayat_penyakit || <span className="text-gray-400">Tidak ada data</span>}
+                      </p>
+                    </div>
                   )}
                 </div>
 
@@ -1339,6 +1511,23 @@ export default function DashboardDokter() {
                   </div>
                   )}
 
+
+                  {/* Tombol pratinjau / cetak lembar resep */}
+                  {tujuan !== 'selesai' && (
+                    <button
+                      type="button"
+                      onClick={() => setTampilLembarResep(true)}
+                      className="w-full py-2 rounded-lg border border-blue-300 text-blue-700 text-sm font-medium hover:bg-blue-50"
+                    >
+                      🖨️ Pratinjau &amp; Cetak Lembar Resep
+                    </button>
+                  )}
+                  {tujuan !== 'selesai' && (
+                    <p className="text-[11px] text-gray-400 -mt-2">
+                      Telaah Resep &amp; Informasi Obat diisi oleh apoteker, jadi tabelnya tercetak kosong di sini.
+                    </p>
+                  )}
+
                   {/* Tombol */}
                   <div className="flex gap-3 pt-2">
                     <button
@@ -1382,6 +1571,22 @@ export default function DashboardDokter() {
         </div>
 
       </div>
+
+      {/* MODAL PRATINJAU & CETAK LEMBAR RESEP */}
+      {selected && (
+        <ModalLembarResep
+          terbuka={tampilLembarResep}
+          onTutup={() => setTampilLembarResep(false)}
+          instansi={profile?.instansi}
+          pasien={selected.pasien}
+          kunjungan={selected}
+          umur={umur}
+          skrining={skrining}
+          form={form}
+          resepList={resepList}
+          namaPoli={selected.poli?.nama_poli || profile?.poli?.nama_poli || ''}
+        />
+      )}
 
       {/* MODAL POPUP VALIDASI */}
       {error && (

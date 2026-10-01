@@ -38,10 +38,29 @@ function getTabStorageKey() {
   const K = '__epiflow_tab_id'
   let tabId = window.sessionStorage.getItem(K)
   if (!tabId) {
-    tabId = crypto.randomUUID()
+    tabId = buatTabId()
     window.sessionStorage.setItem(K, tabId)
   }
   return `sb-auth-token-tab-${tabId}`
+}
+
+// crypto.randomUUID() hanya tersedia di "secure context" (HTTPS atau
+// localhost). Saat dev server dibuka dari HP lewat IP jaringan lokal
+// (http://192.168.x.x:5173), browser menganggap origin itu TIDAK aman,
+// sehingga crypto.randomUUID hilang sama sekali dan lempar
+// "crypto.randomUUID is not a function" — bikin seluruh app gagal
+// render (layar putih), karena file ini dipanggil paling awal.
+// Fallback ini tidak butuh secure context sama sekali, cukup unik
+// per-tab (bukan untuk keamanan kriptografis), jadi aman dipakai di sini.
+function buatTabId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
 }
 
 // Lock no-op: langsung jalankan fn() tanpa menunggu/mengunci lewat

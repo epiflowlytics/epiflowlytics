@@ -2,23 +2,157 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../../lib/supabaseClient'
 import { buatHtmlKartuRekamMedis, cetakKartuRekamMedis } from './utils/cetakKartuRekamMedis'
 
+// Bungkus HTML kartu RM (yang aslinya berukuran fisik kertas F4, jauh lebih
+// lebar dari layar HP) dengan sedikit CSS+JS TAMBAHAN khusus mode pratinjau
+// di dalam <iframe>. HTML aslinya dari buatHtmlKartuRekamMedis() TIDAK
+// diubah/disalin ulang di sini — hanya dibungkus dari luar — supaya:
+// 1) isi & susunan kartu tetap PERSIS sama seperti sebelumnya (identitas,
+//    tabel riwayat, dst — tidak ada yang dirombak),
+// 2) hasil Cetak (F4) via cetakKartuRekamMedis() sama sekali tidak
+//    terpengaruh, karena fungsi itu memakai HTML asli tanpa bungkus ini.
+// Triknya: setelah halaman iframe selesai dimuat, ukur lebar asli kontennya
+// (scrollWidth), lalu terapkan `transform: scale()` supaya lebarnya pas
+// dengan lebar iframe yang tersedia (tanpa perlu geser kiri/kanan lagi).
+// Tinggi iframe ikut disesuaikan (via postMessage) supaya tidak ada scroll
+// vertikal ganda (scroll di iframe DAN scroll di luar iframe).
+function buatHtmlPratinjauFit(htmlAsli) {
+  const skripPenyesuai = `
+    <script>
+      function sesuaikanSkala() {
+        var body = document.body
+        body.style.transformOrigin = 'top left'
+        body.style.transform = 'scale(1)'
+        var lebarAsli = body.scrollWidth
+        var lebarTersedia = window.innerWidth
+        var skala = lebarAsli > lebarTersedia ? (lebarTersedia / lebarAsli) : 1
+        body.style.transform = 'scale(' + skala + ')'
+        var tinggiAsli = body.scrollHeight
+        window.parent.postMessage(
+          { jenis: 'tinggiKartuRm', tinggi: Math.ceil(tinggiAsli * skala) },
+          '*'
+        )
+      }
+      window.addEventListener('load', sesuaikanSkala)
+      window.addEventListener('resize', sesuaikanSkala)
+    </script>
+  `
+  // Sisipkan tepat sebelum penutup </body> supaya semua elemen kartu sudah
+  // ada di DOM saat skrip ini jalan.
+  return htmlAsli.replace('</body>', skripPenyesuai + '</body>')
+}
+
+// Kompresi foto sebelum upload — resize sisi terpanjang ke maks 1600px +
+// kualitas JPEG 70%. Diperkuat dari versi awal (2000px/85%) karena
+// beberapa HP menghasilkan foto kamera 4000-5000px+ sisi terpanjang yang
+// masih jadi 10MB+ meski sudah "dikompres" di kualitas 85%. 1600px sudah
+// lebih dari cukup tajam untuk dibaca (termasuk tulisan tangan) dan
+// dicetak di ukuran F4 — riset umum untuk dokumen teks menyebut kisaran
+// 1200-1600px sudah tajam di ukuran kertas seperti ini. Hasil tipikal:
+// foto 11MB turun ke kira-kira 200-400KB. PDF tidak disentuh sama sekali.
+const MAKS_SISI_FOTO = 1600
+const KUALITAS_FOTO = 0.7
+
+function kompresGambar(file) {
+  return new Promise((resolve) => {
+    // Bukan gambar (mis. HEIC yang tidak didukung <img>, atau file aneh) ->
+    // biarkan lolos apa adanya, jangan sampai upload gagal karena kompresi.
+    if (!file.type.startsWith('image/')) {
+      resolve(file)
+      return
+    }
+
+    const img = new Image()
+    const urlSementara = URL.createObjectURL(file)
+
+    img.onload = () => {
+      URL.revokeObjectURL(urlSementara)
+
+      let { width, height } = img
+      if (width > MAKS_SISI_FOTO || height > MAKS_SISI_FOTO) {
+        if (width >= height) {
+          height = Math.round((height * MAKS_SISI_FOTO) / width)
+          width = MAKS_SISI_FOTO
+        } else {
+          width = Math.round((width * MAKS_SISI_FOTO) / height)
+          height = MAKS_SISI_FOTO
+        }
+      }
+
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(img, 0, 0, width, height)
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            // Gagal compress -> pakai file asli daripada gagal total.
+            resolve(file)
+            return
+          }
+          // Kalau hasil kompresi malah lebih besar dari asli (jarang terjadi,
+          // biasanya file kecil), pakai yang asli saja.
+          if (blob.size >= file.size) {
+            resolve(file)
+            return
+          }
+          const namaBaru = file.name.replace(/\.[^.]+$/, '') + '.jpg'
+          resolve(new File([blob], namaBaru, { type: 'image/jpeg', lastModified: Date.now() }))
+        },
+        'image/jpeg',
+        KUALITAS_FOTO
+      )
+    }
+
+    img.onerror = () => {
+      URL.revokeObjectURL(urlSementara)
+      // Gagal load sebagai gambar -> upload apa adanya.
+      resolve(file)
+    }
+
+    img.src = urlSementara
+  })
+}
+
+// Jalankan sekumpulan tugas async dengan batas concurrency, supaya tidak
+// membanjiri koneksi (terutama di HP dg sinyal lemah) tapi tetap jauh lebih
+// cepat daripada satu-satu berurutan.
+async function jalankanDenganBatas(items, batas, tugas) {
+  const hasil = []
+  let idx = 0
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++
+      hasil[i] = await tugas(items[i], i)
+    }
+  }
+  const workers = Array.from({ length: Math.min(batas, items.length) }, worker)
+  await Promise.all(workers)
+  return hasil
+}
+
 // ─── KOMPONEN MANDIRI: Tabel Riwayat Pemeriksaan ala Kartu Rekam Medis ──
 // Dipakai di form pendaftaran & popup konfirmasi pasien lama. Loket hanya
 // MELIHAT (read-only) — kolom klinis (Anamnesa, Diagnosa, Therapy/Tindakan,
 // ICD X, Paraf) diisi oleh akun perawat/dokter di masing-masing poli, bukan
 // oleh loket. Sel yang belum diisi ditampilkan strip (-). Semua riwayat
 // ditampilkan, tidak dibatasi jumlah (tidak ada limit 10).
-export default function TabelRiwayatPemeriksaan({ riwayat, loading, dataPasien, instansi, profile }) {
-  // Panel "Lihat riwayat pemeriksaan" terbuka/tertutup DI DALAM kolom/card
-  // ini juga (bukan modal/popup terpisah), supaya petugas tetap bisa lihat
-  // riwayat sambil mengisi form pemeriksaan di sebelahnya. Isinya kartu
-  // rekam medis PENUH, sama persis dengan hasil Cetak (F4).
-  const [panelLihatTerbuka, setPanelLihatTerbuka] = useState(false)
+export default function TabelRiwayatPemeriksaan({ riwayat, loading, dataPasien, instansi, profile, bukaOtomatis = false }) {
+  // Panel "Lihat riwayat pemeriksaan" — TETAP DI DALAM kolom/card ini
+  // ... (lihat komentar di bawah pada elemen <iframe>).
+  const [panelLihatTerbuka, setPanelLihatTerbuka] = useState(bukaOtomatis)
+  // Tinggi iframe pratinjau kartu RM, dihitung otomatis dari konten asli
+  // (dikirim lewat postMessage oleh skrip sesuaikanSkala di dalam iframe).
+  // Dibatasi max supaya panel tidak jadi sangat panjang kalau riwayatnya
+  // banyak — tetap bisa discroll VERTIKAL (bukan horizontal lagi) di luar iframe.
+  const [tinggiIframeKartuRm, setTinggiIframeKartuRm] = useState(384) // fallback h-96
 
   // Berkas RM fisik (foto/scan/PDF) yang diupload untuk pasien ini.
   const [berkasList, setBerkasList] = useState([])
   const [berkasLoading, setBerkasLoading] = useState(false)
   const [uploadingBerkas, setUploadingBerkas] = useState(false)
+  const [progresUpload, setProgresUpload] = useState(null) // { selesai, total }
   const [errorBerkas, setErrorBerkas] = useState('')
   const inputFotoRef = useRef(null)
   const inputPdfRef = useRef(null)
@@ -37,16 +171,23 @@ export default function TabelRiwayatPemeriksaan({ riwayat, loading, dataPasien, 
       setBerkasLoading(false)
       return
     }
-    // Buat signed URL (bucket privat) untuk tiap berkas supaya bisa ditampilkan/diunduh.
-    const denganUrl = await Promise.all(
-      (data || []).map(async (b) => {
-        const { data: signed } = await supabase
-          .storage
-          .from('berkas-rm')
-          .createSignedUrl(b.path_storage, 60 * 60) // berlaku 1 jam
-        return { ...b, url: signed?.signedUrl || null }
-      })
-    )
+    // Buat signed URL (bucket privat) untuk SEMUA berkas dalam 1 request
+    // batch (bukan N request satu-satu) — createSignedUrls (plural) dari
+    // Supabase Storage menerima array path sekaligus.
+    const daftarPath = (data || []).map((b) => b.path_storage)
+    let petaUrl = {}
+    if (daftarPath.length > 0) {
+      const { data: signedList, error: signedError } = await supabase
+        .storage
+        .from('berkas-rm')
+        .createSignedUrls(daftarPath, 60 * 60) // berlaku 1 jam
+      if (!signedError && signedList) {
+        signedList.forEach((s) => {
+          if (s.path) petaUrl[s.path] = s.signedUrl || null
+        })
+      }
+    }
+    const denganUrl = (data || []).map((b) => ({ ...b, url: petaUrl[b.path_storage] || null }))
     setBerkasList(denganUrl)
     setBerkasLoading(false)
   }
@@ -56,41 +197,81 @@ export default function TabelRiwayatPemeriksaan({ riwayat, loading, dataPasien, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pasienId])
 
+  useEffect(() => {
+    if (bukaOtomatis) setPanelLihatTerbuka(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bukaOtomatis, pasienId])
+
+  // Terima tinggi konten asli kartu RM dari skrip sesuaikanSkala di dalam
+  // iframe (lihat buatHtmlPratinjauFit di atas), supaya iframe tidak perlu
+  // scroll vertikal sendiri lagi (panel luar yang scroll, sekali saja).
+  useEffect(() => {
+    function onPesan(e) {
+      if (e?.data?.jenis === 'tinggiKartuRm' && typeof e.data.tinggi === 'number') {
+        const TINGGI_MIN = 200
+        const TINGGI_MAKS = 900 // batas atas supaya panel tidak jadi sangat panjang
+        setTinggiIframeKartuRm(Math.min(TINGGI_MAKS, Math.max(TINGGI_MIN, e.data.tinggi)))
+      }
+    }
+    window.addEventListener('message', onPesan)
+    return () => window.removeEventListener('message', onPesan)
+  }, [])
+
   async function handleUploadBerkas(fileList, tipe) {
     if (!fileList || fileList.length === 0 || !pasienId || !instansi?.id) return
     setErrorBerkas('')
     setUploadingBerkas(true)
+    const semuaFile = Array.from(fileList)
+    setProgresUpload({ selesai: 0, total: semuaFile.length })
+
+    const gagal = []
     try {
-      for (const file of Array.from(fileList)) {
-        const ekstensi = file.name.split('.').pop()
-        const namaAcak = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ekstensi}`
-        const path = `${instansi.id}/${pasienId}/${namaAcak}`
+      // Maks 3 file diupload bersamaan — jauh lebih cepat dari satu-satu,
+      // tapi tidak membanjiri koneksi (penting utk HP dg sinyal lemah).
+      await jalankanDenganBatas(semuaFile, 3, async (fileAsli) => {
+        try {
+          // Titik #1: foto dikompres dulu sebelum upload (PDF lolos apa adanya).
+          const file = tipe === 'foto' ? await kompresGambar(fileAsli) : fileAsli
 
-        const { error: uploadError } = await supabase
-          .storage
-          .from('berkas-rm')
-          .upload(path, file, { contentType: file.type, upsert: false })
-        if (uploadError) throw uploadError
+          const ekstensi = file.name.split('.').pop()
+          const namaAcak = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ekstensi}`
+          const path = `${instansi.id}/${pasienId}/${namaAcak}`
 
-        const { error: insertError } = await supabase
-          .from('berkas_rm')
-          .insert({
-            pasien_id: pasienId,
-            instansi_id: instansi.id,
-            nama_file: file.name,
-            tipe_file: tipe,
-            path_storage: path,
-            ukuran_bytes: file.size,
-            diupload_oleh: profile?.id || null,
-          })
-        if (insertError) throw insertError
-      }
+          const { error: uploadError } = await supabase
+            .storage
+            .from('berkas-rm')
+            .upload(path, file, { contentType: file.type, upsert: false })
+          if (uploadError) throw uploadError
+
+          const { error: insertError } = await supabase
+            .from('berkas_rm')
+            .insert({
+              pasien_id: pasienId,
+              instansi_id: instansi.id,
+              nama_file: fileAsli.name, // nama asli tetap ditampilkan ke user
+              tipe_file: tipe,
+              path_storage: path,
+              ukuran_bytes: file.size,
+              diupload_oleh: profile?.id || null,
+            })
+          if (insertError) throw insertError
+        } catch (err) {
+          gagal.push(fileAsli.name)
+        } finally {
+          setProgresUpload((prev) => ({ selesai: (prev?.selesai || 0) + 1, total: semuaFile.length }))
+        }
+      })
+
       await muatBerkasRm(pasienId)
       setPanelLihatTerbuka(true)
+      if (gagal.length > 0) {
+        setErrorBerkas(`Gagal upload: ${gagal.join(', ')}. Berkas lain berhasil.`)
+      }
     } catch (err) {
       setErrorBerkas(err?.message || 'Gagal upload berkas. Coba lagi.')
     } finally {
       setUploadingBerkas(false)
+      setProgresUpload(null)
       if (inputFotoRef.current) inputFotoRef.current.value = ''
       if (inputPdfRef.current) inputPdfRef.current.value = ''
     }
@@ -154,7 +335,9 @@ export default function TabelRiwayatPemeriksaan({ riwayat, loading, dataPasien, 
           </button>
         </div>
         {uploadingBerkas && (
-          <p className="text-[11px] text-blue-600 w-full">Mengunggah berkas...</p>
+          <p className="text-[11px] text-blue-600 w-full">
+            Mengunggah berkas{progresUpload ? ` (${progresUpload.selesai}/${progresUpload.total})` : '...'}
+          </p>
         )}
         {errorBerkas && (
           <p className="text-[11px] text-red-600 w-full">{errorBerkas}</p>
@@ -267,9 +450,12 @@ export default function TabelRiwayatPemeriksaan({ riwayat, loading, dataPasien, 
       {/* Panel "Lihat riwayat pemeriksaan" — TETAP DI DALAM kolom/card ini
           (bukan modal/popup yang menutupi layar), supaya petugas bisa cek
           riwayat sambil tetap mengisi form pemeriksaan di sebelahnya.
-          Kontennya HTML kartu yang sama persis dengan hasil Cetak (F4),
-          dirender lewat <iframe srcDoc>. Tingginya dibatasi (max-h) dan
-          bisa discroll ke bawah kalau riwayatnya panjang. */}
+          Kontennya HTML kartu yang SAMA PERSIS dengan hasil Cetak (F4) —
+          tidak dirombak sama sekali — hanya di-scale otomatis (lihat
+          buatHtmlPratinjauFit) supaya pas dengan lebar layar HP, tidak
+          perlu geser kiri-kanan lagi. Tinggi iframe menyesuaikan konten
+          (postMessage), dan panel luar yang menangani scroll VERTIKAL kalau
+          riwayatnya panjang, bukan iframe-nya sendiri. */}
       {panelLihatTerbuka && (
         <div className="mt-3 border rounded-xl overflow-hidden">
           <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b">
@@ -285,11 +471,15 @@ export default function TabelRiwayatPemeriksaan({ riwayat, loading, dataPasien, 
             </button>
           </div>
 
-          <iframe
-            title="Pratinjau Kartu Rekam Medis"
-            srcDoc={buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat, berkasList)}
-            className="w-full h-96 bg-gray-100"
-          />
+          <div className="overflow-y-auto overflow-x-hidden bg-gray-100" style={{ maxHeight: 480 }}>
+            <iframe
+              title="Pratinjau Kartu Rekam Medis"
+              srcDoc={buatHtmlPratinjauFit(buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat, berkasList))}
+              className="w-full border-0 block"
+              style={{ height: tinggiIframeKartuRm }}
+              scrolling="no"
+            />
+          </div>
 
           <div className="px-3 py-2 border-t bg-gray-50">
             <button

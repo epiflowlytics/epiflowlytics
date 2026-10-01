@@ -8,6 +8,12 @@ import TabelRiwayatPemeriksaan from './TabelRiwayatPemeriksaan'
 import ModalKelolaRak from './ModalKelolaRak'
 import ModalRetribusi from './ModalRetribusi'
 import RiwayatPendaftaran from './RiwayatPendaftaran'
+import BottomBar from './BottomBar'
+import LoadingOverlay from './LoadingOverlay'
+import { useConsentLoket } from '../../consent/useConsentLoket'
+import ModalFormConsent from '../../consent/ModalFormConsent'
+import ModalQrConsent from '../../consent/ModalQrConsent'
+import ArsipGeneralConsent from '../../consent/ArsipGeneralConsent'
 import {
   hitungUmur,
   kategoriUmur,
@@ -20,6 +26,11 @@ import {
   PCARE_URL,
   EPUSKESMAS_URL,
   perluRetribusi,
+  OPSI_KATEGORI_PASIEN,
+  badgeKategoriPasien,
+  labelKategoriPasien,
+  normalisasiPekerjaan,
+  OPSI_PEKERJAAN,
 } from './utils/pasienHelpers'
 
 /* ────────────────────────────────────────────────────────────────
@@ -35,6 +46,10 @@ import {
 export default function DashboardLoket() {
   const { signOut } = useAuth()
   const [step, setStep] = useState('kategori')
+  // Overlay loading singkat yang tampil setiap kali pindah menu lewat
+  // BottomBar, sambil menunggu halaman/modal tujuan siap dirender.
+  const [loadingBottomBar, setLoadingBottomBar] = useState(null) // null = tidak loading, string = label yang ditampilkan
+  const bottomBarTimeoutRef = useRef(null) // simpan timer aktif supaya bisa dibatalkan kalau user klik menu lain sebelum timer sebelumnya selesai
   const [form, setForm] = useState(FORM_AWAL)
   const [polis, setPolis] = useState([])
   const [petugasPoliList, setPetugasPoliList] = useState([]) // nakes aktif (dokter/PJ ruangan), dipakai untuk dipilih sebagai penanggung jawab pasien di poli tujuan
@@ -59,7 +74,7 @@ export default function DashboardLoket() {
   const [tiketAntrian, setTiketAntrian] = useState(null) // { nomor, namaPoli }
 
   // FITUR 2, 3, 5, 10: data dashboard
-  const [stats, setStats] = useState({ total: 0, bpjs: 0, umum: 0, menunggu: 0, selesai: 0 })
+  const [stats, setStats] = useState({ total: 0, bpjs: 0, umum: 0, asuransi_lainnya: 0, menunggu: 0, selesai: 0 })
   const [antrianPoli, setAntrianPoli] = useState([])
   const [monitoringLoket, setMonitoringLoket] = useState([])
 
@@ -82,10 +97,22 @@ export default function DashboardLoket() {
   const [rakList, setRakList] = useState([])
   const [showKelolaRak, setShowKelolaRak] = useState(false)
   const [showModalRetribusi, setShowModalRetribusi] = useState(false)
+
+  // Fitur General Consent digital: cek/buat consent otomatis setiap
+  // pendaftaran kunjungan baru, tanpa memblokir alur cetak tiket loket.
+  const consentLoket = useConsentLoket()
+  const [showRiwayatPendaftaran, setShowRiwayatPendaftaran] = useState(false)
+  const [showArsipConsent, setShowArsipConsent] = useState(false)
   const [showKonfirmasiLogout, setShowKonfirmasiLogout] = useState(false)
   const [rakForm, setRakForm] = useState({ id: null, kode_rak: '', nama_rak: '' })
   const [rakLoading, setRakLoading] = useState(false)
   const [rakError, setRakError] = useState('')
+
+  // Lihat riwayat pemeriksaan dari dalam modal Kelola Rak (read-only, tanpa
+  // alur pilih kategori BPJS/Umum seperti pasienTerpilih di atas)
+  const [pasienRiwayatDilihat, setPasienRiwayatDilihat] = useState(null)
+  const [riwayatRakPasien, setRiwayatRakPasien] = useState([])
+  const [riwayatRakLoading, setRiwayatRakLoading] = useState(false)
 
   // Tambah Pasien langsung dari dalam rak (bukan lewat alur antrian/poli)
   const [pasienRakBaru, setPasienRakBaru] = useState(null) // isi = kalau lagi buka halaman tambah pasien untuk rak tertentu
@@ -94,6 +121,16 @@ export default function DashboardLoket() {
   const [pasienRakLoading, setPasienRakLoading] = useState(false)
   const [pasienRakError, setPasienRakError] = useState('')
   const [anggotaKkRak, setAnggotaKkRak] = useState([]) // hasil cek No.KK di form tambah pasien rak
+  const [fotoUploadingRak, setFotoUploadingRak] = useState(false)
+  // fotoPreviewUrlRak: URL yang ditampilkan di form (bisa object URL lokal
+  // untuk foto pending, atau signed URL untuk foto yang sudah tersimpan).
+  const [fotoPreviewUrlRak, setFotoPreviewUrlRak] = useState('')
+  // fotoPendingBlobRak: blob hasil kompresi yang BELUM diupload ke storage.
+  // Diisi begitu petugas pilih foto dari Kamera/Upload File. Null berarti
+  // tidak ada foto pending (foto sudah tersimpan, atau belum ada foto sama
+  // sekali) — dipakai form untuk menentukan tombol mana yang ditampilkan:
+  // "Simpan Foto" (ada pending) vs "Hapus"/"Ganti Foto" (sudah tersimpan).
+  const [fotoPendingBlobRak, setFotoPendingBlobRak] = useState(null)
   const [cekKkRakLoading, setCekKkRakLoading] = useState(false)
   // Popup validasi field wajib: { pesan, fokusKe } — fokusKe dijalankan
   // setelah tombol OK di popup diklik, supaya kursor langsung ke field yang dimaksud.
@@ -107,8 +144,21 @@ export default function DashboardLoket() {
   const refPasienRakNama = useRef(null)
   const refPasienRakNoRm = useRef(null)
   const refPasienRakNik = useRef(null)
+  const refPasienRakNikPendamping = useRef(null)
   const refPasienRakTanggalLahir = useRef(null)
   const refPasienRakJenisKelamin = useRef(null)
+
+  // Pastikan timer LoadingOverlay dibatalkan kalau komponen ini di-unmount
+  // (mis. user berpindah route) tepat saat overlay masih berjalan — tanpa
+  // ini, setTimeout tetap coba jalan dan memanggil setState pada komponen
+  // yang sudah tidak ter-mount.
+  useEffect(() => {
+    return () => {
+      if (bottomBarTimeoutRef.current) {
+        clearTimeout(bottomBarTimeoutRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     fetchProfile()
@@ -120,35 +170,12 @@ export default function DashboardLoket() {
     }
   }, [])
 
-  // Kunci tampilan DashboardLoket ke mode desktop, khusus saat halaman ini
-  // aktif (mis. diakses dari HP petugas). Meta viewport dikembalikan ke
-  // pengaturan semula saat komponen ini ditinggalkan, supaya halaman lain
-  // (mis. StatusAntrian yang dibuka pasien) tidak ikut terpengaruh.
-  useEffect(() => {
-    const meta = document.querySelector('meta[name="viewport"]')
-    const kontenAsli = meta ? meta.getAttribute('content') : null
-    let metaDibuatBaru = false
-
-    if (meta) {
-      meta.setAttribute('content', 'width=1024')
-    } else {
-      const metaBaru = document.createElement('meta')
-      metaBaru.name = 'viewport'
-      metaBaru.content = 'width=1024'
-      document.head.appendChild(metaBaru)
-      metaDibuatBaru = true
-    }
-
-    return () => {
-      const metaSaatIni = document.querySelector('meta[name="viewport"]')
-      if (!metaSaatIni) return
-      if (metaDibuatBaru) {
-        metaSaatIni.remove()
-      } else if (kontenAsli !== null) {
-        metaSaatIni.setAttribute('content', kontenAsli)
-      }
-    }
-  }, [])
+  // CATATAN: viewport tidak lagi dikunci ke lebar desktop (width=1024).
+  // Dulu dikunci supaya tampilan tabel/grid tidak berantakan di HP, tapi
+  // sekarang layout sudah dibuat responsive (grid menu, statistik, dan
+  // Riwayat Pendaftaran menyesuaikan lebar layar), jadi viewport asli
+  // (device-width) dibiarkan aktif supaya benar-benar nyaman dipakai
+  // dari HP Android/iOS petugas loket.
 
   async function fetchProfile() {
     const { data: { user } } = await supabase.auth.getUser()
@@ -278,16 +305,70 @@ export default function DashboardLoket() {
         no_rekam_medis: pasienEdit.no_rekam_medis || '',
         mode_rm: 'manual',
         no_nik: pasienEdit.no_nik || '',
+        no_nik_pendamping: pasienEdit.no_nik_pendamping || '',
+        nama_ibu_kandung: pasienEdit.nama_ibu_kandung || '',
+        kewarganegaraan: pasienEdit.kewarganegaraan || 'WNI',
+        no_telepon: pasienEdit.no_telepon || '',
+        golongan_darah: pasienEdit.golongan_darah || '',
+        foto_url: pasienEdit.foto_url || '',
         no_bpjs: pasienEdit.no_bpjs || '',
         alamat: pasienEdit.alamat || '',
         tempat_lahir: pasienEdit.tempat_lahir || '',
         tanggal_lahir: pasienEdit.tanggal_lahir || '',
-        pekerjaan: pasienEdit.pekerjaan || '',
+        pekerjaan: normalisasiPekerjaan(pasienEdit.pekerjaan),
         jenis_kelamin: pasienEdit.jenis_kelamin || '',
+        agama: pasienEdit.agama || '',
+        status_perkawinan: pasienEdit.status_perkawinan || '',
+        pendidikan: pasienEdit.pendidikan || '',
+
+        // Alamat sesuai KTP
+        alamat_ktp_rt: pasienEdit.alamat_ktp_rt || '',
+        alamat_ktp_rw: pasienEdit.alamat_ktp_rw || '',
+        alamat_ktp_provinsi: pasienEdit.alamat_ktp_provinsi || '',
+        alamat_ktp_kabupaten: pasienEdit.alamat_ktp_kabupaten || '',
+        alamat_ktp_kecamatan: pasienEdit.alamat_ktp_kecamatan || '',
+        alamat_ktp_kelurahan: pasienEdit.alamat_ktp_kelurahan || '',
+        alamat_ktp_kode_pos: pasienEdit.alamat_ktp_kode_pos || '',
+        alamat_ktp_negara: pasienEdit.alamat_ktp_negara || 'Indonesia',
+
+        // Alamat domisili
+        domisili_sama_dengan_ktp: !!pasienEdit.domisili_sama_dengan_ktp,
+        alamat_domisili: pasienEdit.alamat_domisili || '',
+        alamat_domisili_rt: pasienEdit.alamat_domisili_rt || '',
+        alamat_domisili_rw: pasienEdit.alamat_domisili_rw || '',
+        alamat_domisili_provinsi: pasienEdit.alamat_domisili_provinsi || '',
+        alamat_domisili_kabupaten: pasienEdit.alamat_domisili_kabupaten || '',
+        alamat_domisili_kecamatan: pasienEdit.alamat_domisili_kecamatan || '',
+        alamat_domisili_kelurahan: pasienEdit.alamat_domisili_kelurahan || '',
+        alamat_domisili_kode_pos: pasienEdit.alamat_domisili_kode_pos || '',
+        alamat_domisili_negara: pasienEdit.alamat_domisili_negara || 'Indonesia',
+
+        // Data tambahan lain
+        no_identitas_lain: pasienEdit.no_identitas_lain || '',
+        no_telepon_rumah: pasienEdit.no_telepon_rumah || '',
+        suku: pasienEdit.suku || '',
+        bahasa_dikuasai: pasienEdit.bahasa_dikuasai || '',
+
+        // Data bayi baru lahir
+        is_bayi_baru_lahir: !!pasienEdit.is_bayi_baru_lahir,
+        nama_bayi: pasienEdit.nama_bayi || '',
+        nik_ibu_kandung: pasienEdit.nik_ibu_kandung || '',
+        jam_lahir: pasienEdit.jam_lahir || '',
+        no_telepon_pengantar: pasienEdit.no_telepon_pengantar || '',
       })
       setAnggotaKkRak([])
       setPasienRakError('')
       setPopupValidasiPasienRak(null)
+      setFotoPreviewUrlRak('')
+      setFotoPendingBlobRak(null) // mode edit: foto (kalau ada) sudah tersimpan, bukan pending
+      // Kalau pasien sudah punya foto tersimpan, buat signed URL supaya
+      // preview-nya bisa ditampilkan di form edit (bucket privat).
+      if (pasienEdit.foto_url) {
+        const { data: signedData } = await supabase.storage
+          .from('berkas-rm')
+          .createSignedUrl(pasienEdit.foto_url, 3600)
+        if (signedData?.signedUrl) setFotoPreviewUrlRak(signedData.signedUrl)
+      }
       return
     }
     setEditPasienRakId(null)
@@ -298,6 +379,8 @@ export default function DashboardLoket() {
     setAnggotaKkRak([])
     setPasienRakError('')
     setPopupValidasiPasienRak(null)
+    setFotoPreviewUrlRak('')
+    setFotoPendingBlobRak(null)
     await sinkronkanNomorUrutRak(rak.id)
     const noRmBaru = await generateNoRmDariRak(rak.id)
     setFormPasienRak((prev) => ({ ...prev, no_rekam_medis: noRmBaru || '' }))
@@ -318,12 +401,22 @@ export default function DashboardLoket() {
     setFormPasienRak({
       ...FORM_PASIEN_RAK_AWAL,
       no_rekam_medis: pasienGrup?.no_rekam_medis || '',
+      no_kk: pasienGrup?.no_kk || '',
+      nama_kepala_keluarga: pasienGrup?.nama_kepala_keluarga || '',
       mode_rm: 'manual',
       rm_terkunci: true,
     })
     setAnggotaKkRak([])
     setPasienRakError('')
     setPopupValidasiPasienRak(null)
+    setFotoPreviewUrlRak('')
+    setFotoPendingBlobRak(null)
+    // No. KK sudah otomatis terisi dari grup, jadi langsung muat daftar
+    // anggotanya juga (termasuk data Ibu/Ayah) supaya NIK Pendamping bisa
+    // auto-isi, sama seperti kalau petugas ketik manual lalu "Cek KK".
+    if (pasienGrup?.no_kk) {
+      cekNoKkRak(pasienGrup.no_kk)
+    }
   }
 
   function tutupTambahPasienRak() {
@@ -333,6 +426,14 @@ export default function DashboardLoket() {
     setAnggotaKkRak([])
     setPopupValidasiPasienRak(null)
     setPasienRakError('')
+    // Kalau ada foto pending yang belum sempat disimpan (URL.createObjectURL),
+    // lepas dulu supaya tidak bocor memori — foto ini memang TIDAK PERNAH
+    // ke storage karena upload hanya terjadi saat tombol "Simpan Foto" diklik.
+    setFotoPreviewUrlRak((prevUrl) => {
+      if (prevUrl && prevUrl.startsWith('blob:')) URL.revokeObjectURL(prevUrl)
+      return ''
+    })
+    setFotoPendingBlobRak(null)
   }
 
   // Hapus pasien dari rak (hapus permanen dari database).
@@ -427,7 +528,7 @@ export default function DashboardLoket() {
     setCekKkRakLoading(true)
     const { data, error } = await supabase
       .from('pasien')
-      .select('id, nama_lengkap, nama_kepala_keluarga, no_rekam_medis, urutan_kk, status_keluarga, status_keluarga_lainnya, no_nik, no_bpjs, alamat, tempat_lahir, tanggal_lahir, pekerjaan, jenis_kelamin, rak_id')
+      .select('id, nama_lengkap, nama_kepala_keluarga, no_rekam_medis, urutan_kk, status_keluarga, status_keluarga_lainnya, no_nik, no_bpjs, alamat, tempat_lahir, tanggal_lahir, pekerjaan, jenis_kelamin, agama, status_perkawinan, pendidikan, rak_id')
       .eq('instansi_id', profile.instansi_id)
       .eq('no_kk', noKk.trim())
       .order('urutan_kk', { ascending: true })
@@ -441,6 +542,20 @@ export default function DashboardLoket() {
 
     setAnggotaKkRak(data || [])
 
+    // Auto-isi NIK Pendamping dari data Ibu (prioritas) atau Ayah, jika ada
+    // dan field-nya belum diisi manual oleh petugas. Kalau keduanya tidak
+    // ada, dibiarkan kosong (boleh diisi manual).
+    if (data && data.length > 0) {
+      const ibu = data.find((p) => p.status_keluarga === 'ibu' && p.no_nik)
+      const ayah = data.find((p) => p.status_keluarga === 'ayah' && p.no_nik)
+      const nikOrtu = ibu?.no_nik || ayah?.no_nik || ''
+      if (nikOrtu) {
+        setFormPasienRak((prev) =>
+          prev.no_nik_pendamping ? prev : { ...prev, no_nik_pendamping: nikOrtu }
+        )
+      }
+    }
+
     if (data && data.length > 0 && data[0].no_rekam_medis) {
       setFormPasienRak((prev) => ({
         ...prev,
@@ -448,6 +563,125 @@ export default function DashboardLoket() {
         mode_rm: 'manual', // kunci supaya tidak ke-generate ulang otomatis
       }))
     }
+  }
+
+  // Kompres & resize foto sebelum upload — ukuran file kecil tapi tetap
+  // jelas/HD untuk keperluan identifikasi pasien. Lebar dibatasi maksimal
+  // 800px (cukup tajam untuk foto wajah), kualitas JPEG 80%.
+  function kompresFotoPasien(file, maxWidth = 800, quality = 0.8) {
+    return new Promise((resolve, reject) => {
+      const img = new Image()
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        img.onload = () => {
+          const scale = Math.min(1, maxWidth / img.width)
+          const canvas = document.createElement('canvas')
+          canvas.width = img.width * scale
+          canvas.height = img.height * scale
+          const ctx = canvas.getContext('2d')
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+          canvas.toBlob(
+            (blob) => (blob ? resolve(blob) : reject(new Error('Gagal memproses gambar'))),
+            'image/jpeg',
+            quality
+          )
+        }
+        img.onerror = () => reject(new Error('Gagal membaca gambar'))
+        img.src = e.target.result
+      }
+      reader.onerror = () => reject(new Error('Gagal membaca file'))
+      reader.readAsDataURL(file)
+    })
+  }
+
+  // Petugas pilih foto (Kamera/Upload File/Ganti Foto) — foto DIKOMPRES
+  // langsung, tapi BELUM diupload ke server. Cuma jadi preview lokal
+  // (object URL) sambil blobnya disimpan di fotoPendingBlobRak, menunggu
+  // petugas klik tombol "Simpan Foto". Kalau form dibatalkan sebelum itu,
+  // tidak ada file yang sempat terkirim ke storage sama sekali.
+  async function handleFotoPasienRakChange(e) {
+    const file = e.target.files?.[0]
+    // reset value input supaya bisa pilih file yang sama lagi kalau perlu
+    e.target.value = ''
+    if (!file) return
+
+    setPasienRakError('')
+    try {
+      const blobKecil = await kompresFotoPasien(file)
+      // lepas object URL preview pending sebelumnya (kalau ada) supaya tidak bocor memori
+      setFotoPreviewUrlRak((prevUrl) => {
+        if (prevUrl && prevUrl.startsWith('blob:')) URL.revokeObjectURL(prevUrl)
+        return URL.createObjectURL(blobKecil)
+      })
+      setFotoPendingBlobRak(blobKecil)
+    } catch (err) {
+      setPasienRakError('Gagal memproses foto: ' + err.message)
+    }
+  }
+
+  // Upload foto pending (fotoPendingBlobRak) ke bucket privat 'berkas-rm'.
+  // Dipanggil saat petugas klik tombol "Simpan Foto" di form — bukan
+  // otomatis saat file dipilih. Bucket privat (RLS per instansi), jadi
+  // yang disimpan ke form adalah path saja (bukan public URL); preview
+  // memakai signed URL sementara setelah upload berhasil.
+  async function simpanFotoPasienRak() {
+    if (!fotoPendingBlobRak || !profile?.instansi_id) return
+
+    setFotoUploadingRak(true)
+    try {
+      const path = `foto-pasien/${profile.instansi_id}/${Date.now()}.jpg`
+      const { error: uploadErr } = await supabase.storage
+        .from('berkas-rm')
+        .upload(path, fotoPendingBlobRak, { contentType: 'image/jpeg' })
+      if (uploadErr) throw new Error(uploadErr.message)
+
+      const { data: signedData, error: signedErr } = await supabase.storage
+        .from('berkas-rm')
+        .createSignedUrl(path, 3600) // 1 jam, cukup untuk preview di form
+      if (signedErr) throw new Error(signedErr.message)
+
+      // lepas object URL preview lokal, ganti ke signed URL dari storage
+      setFotoPreviewUrlRak((prevUrl) => {
+        if (prevUrl && prevUrl.startsWith('blob:')) URL.revokeObjectURL(prevUrl)
+        return signedData?.signedUrl || ''
+      })
+      setFormPasienRak((prev) => ({ ...prev, foto_url: path }))
+      setFotoPendingBlobRak(null) // sudah tersimpan, tidak ada lagi yang pending
+    } catch (err) {
+      setPasienRakError('Gagal mengunggah foto: ' + err.message)
+    } finally {
+      setFotoUploadingRak(false)
+    }
+  }
+
+  // Hapus foto pasien. Dua kasus:
+  // 1. Foto masih pending (belum sempat diupload) -> cukup buang preview
+  //    lokal & blob, tidak perlu sentuh storage sama sekali.
+  // 2. Foto sudah tersimpan di storage -> hapus filenya juga dari bucket,
+  //    baru kosongkan field di form.
+  async function hapusFotoPasienRak() {
+    // kasus 1: foto pending, belum pernah diupload
+    if (fotoPendingBlobRak) {
+      setFotoPreviewUrlRak((prevUrl) => {
+        if (prevUrl && prevUrl.startsWith('blob:')) URL.revokeObjectURL(prevUrl)
+        return ''
+      })
+      setFotoPendingBlobRak(null)
+      return
+    }
+
+    // kasus 2: foto sudah tersimpan di storage
+    const pathLama = formPasienRak.foto_url
+    if (pathLama) {
+      const { error: hapusErr } = await supabase.storage.from('berkas-rm').remove([pathLama])
+      if (hapusErr) {
+        setPasienRakError('Gagal menghapus foto: ' + hapusErr.message)
+        return
+      }
+    }
+    setFormPasienRak((prev) => ({ ...prev, foto_url: '' }))
+    setFotoPreviewUrlRak('')
+    setFotoPendingBlobRak(null)
   }
 
   function handleChangeFormPasienRak(e) {
@@ -466,9 +700,14 @@ export default function DashboardLoket() {
     }
     setFormPasienRak((prev) => {
       const updated = { ...prev, [name]: value }
-      // No. KK dan NIK hanya boleh berisi angka
-      if (name === 'no_kk' || name === 'no_nik') {
+      // No. KK dan NIK (termasuk NIK Pendamping) hanya boleh berisi angka
+      if (name === 'no_kk' || name === 'no_nik' || name === 'no_nik_pendamping' || name === 'no_telepon' || name === 'no_telepon_pengantar') {
         updated[name] = value.replace(/\D/g, '')
+      }
+      // Status dalam Keluarga Ayah/Ibu -> Jenis Kelamin ikut otomatis
+      if (name === 'status_keluarga') {
+        if (value === 'ayah') updated.jenis_kelamin = 'L'
+        else if (value === 'ibu') updated.jenis_kelamin = 'P'
       }
       return updated
     })
@@ -541,6 +780,12 @@ export default function DashboardLoket() {
           nama_kepala_keluarga: formPasienRak.nama_kepala_keluarga.trim() || null,
           alamat: formPasienRak.alamat.trim() || null,
           no_nik: formPasienRak.no_nik.trim(),
+          no_nik_pendamping: formPasienRak.no_nik_pendamping.trim() || null,
+          nama_ibu_kandung: formPasienRak.nama_ibu_kandung.trim() || null,
+          kewarganegaraan: formPasienRak.kewarganegaraan || 'WNI',
+          no_telepon: formPasienRak.no_telepon.trim() || null,
+          golongan_darah: formPasienRak.golongan_darah || null,
+          foto_url: formPasienRak.foto_url || null,
           no_bpjs: formPasienRak.no_bpjs.trim() || null,
           no_kk: formPasienRak.no_kk.trim() || null,
           urutan_kk: formPasienRak.urutan_kk ? Number(formPasienRak.urutan_kk) : null,
@@ -553,6 +798,70 @@ export default function DashboardLoket() {
           tanggal_lahir: formPasienRak.tanggal_lahir,
           jenis_kelamin: formPasienRak.jenis_kelamin || null,
           pekerjaan: formPasienRak.pekerjaan.trim() || null,
+          agama: formPasienRak.agama || null,
+          status_perkawinan: formPasienRak.status_perkawinan || null,
+          pendidikan: formPasienRak.pendidikan || null,
+
+          // Alamat sesuai KTP
+          alamat_ktp_rt: formPasienRak.alamat_ktp_rt?.trim() || null,
+          alamat_ktp_rw: formPasienRak.alamat_ktp_rw?.trim() || null,
+          alamat_ktp_provinsi: formPasienRak.alamat_ktp_provinsi || null,
+          alamat_ktp_kabupaten: formPasienRak.alamat_ktp_kabupaten || null,
+          alamat_ktp_kecamatan: formPasienRak.alamat_ktp_kecamatan || null,
+          alamat_ktp_kelurahan: formPasienRak.alamat_ktp_kelurahan || null,
+          alamat_ktp_kode_pos: formPasienRak.alamat_ktp_kode_pos?.trim() || null,
+          alamat_ktp_negara: formPasienRak.alamat_ktp_negara || 'Indonesia',
+
+          // Alamat domisili
+          domisili_sama_dengan_ktp: !!formPasienRak.domisili_sama_dengan_ktp,
+          alamat_domisili: formPasienRak.domisili_sama_dengan_ktp
+            ? null
+            : formPasienRak.alamat_domisili?.trim() || null,
+          alamat_domisili_rt: formPasienRak.domisili_sama_dengan_ktp
+            ? null
+            : formPasienRak.alamat_domisili_rt?.trim() || null,
+          alamat_domisili_rw: formPasienRak.domisili_sama_dengan_ktp
+            ? null
+            : formPasienRak.alamat_domisili_rw?.trim() || null,
+          alamat_domisili_provinsi: formPasienRak.domisili_sama_dengan_ktp
+            ? null
+            : formPasienRak.alamat_domisili_provinsi || null,
+          alamat_domisili_kabupaten: formPasienRak.domisili_sama_dengan_ktp
+            ? null
+            : formPasienRak.alamat_domisili_kabupaten || null,
+          alamat_domisili_kecamatan: formPasienRak.domisili_sama_dengan_ktp
+            ? null
+            : formPasienRak.alamat_domisili_kecamatan || null,
+          alamat_domisili_kelurahan: formPasienRak.domisili_sama_dengan_ktp
+            ? null
+            : formPasienRak.alamat_domisili_kelurahan || null,
+          alamat_domisili_kode_pos: formPasienRak.domisili_sama_dengan_ktp
+            ? null
+            : formPasienRak.alamat_domisili_kode_pos?.trim() || null,
+          alamat_domisili_negara: formPasienRak.domisili_sama_dengan_ktp
+            ? null
+            : formPasienRak.alamat_domisili_negara || 'Indonesia',
+
+          // Data tambahan lain
+          no_identitas_lain: formPasienRak.no_identitas_lain?.trim() || null,
+          no_telepon_rumah: formPasienRak.no_telepon_rumah?.trim() || null,
+          suku: formPasienRak.suku?.trim() || null,
+          bahasa_dikuasai: formPasienRak.bahasa_dikuasai?.trim() || null,
+
+          // Data bayi baru lahir
+          is_bayi_baru_lahir: !!formPasienRak.is_bayi_baru_lahir,
+          nama_bayi: formPasienRak.is_bayi_baru_lahir
+            ? formPasienRak.nama_bayi?.trim() || null
+            : null,
+          nik_ibu_kandung: formPasienRak.is_bayi_baru_lahir
+            ? formPasienRak.nik_ibu_kandung?.trim() || null
+            : null,
+          jam_lahir: formPasienRak.is_bayi_baru_lahir
+            ? formPasienRak.jam_lahir || null
+            : null,
+          no_telepon_pengantar: formPasienRak.is_bayi_baru_lahir
+            ? formPasienRak.no_telepon_pengantar?.trim() || null
+            : null,
         }
         const { error: updateErr } = await supabase
           .from('pasien')
@@ -614,6 +923,12 @@ export default function DashboardLoket() {
         nama_kepala_keluarga: formPasienRak.nama_kepala_keluarga.trim() || null,
         alamat: formPasienRak.alamat.trim() || null,
         no_nik: formPasienRak.no_nik.trim(),
+        no_nik_pendamping: formPasienRak.no_nik_pendamping.trim() || null,
+        nama_ibu_kandung: formPasienRak.nama_ibu_kandung.trim() || null,
+        kewarganegaraan: formPasienRak.kewarganegaraan || 'WNI',
+        no_telepon: formPasienRak.no_telepon.trim() || null,
+        golongan_darah: formPasienRak.golongan_darah || null,
+        foto_url: formPasienRak.foto_url || null,
         no_bpjs: formPasienRak.no_bpjs.trim() || null,
         no_kk: formPasienRak.no_kk.trim() || null,
         urutan_kk: formPasienRak.urutan_kk ? Number(formPasienRak.urutan_kk) : null,
@@ -626,23 +941,43 @@ export default function DashboardLoket() {
         tanggal_lahir: formPasienRak.tanggal_lahir,
         jenis_kelamin: formPasienRak.jenis_kelamin || null,
         pekerjaan: formPasienRak.pekerjaan.trim() || null,
+        agama: formPasienRak.agama || null,
+        status_perkawinan: formPasienRak.status_perkawinan || null,
+        pendidikan: formPasienRak.pendidikan || null,
         rak_id: pasienRakBaru.id,
-        // Kategori pasien (BPJS/Umum) belum relevan di tahap catat biodata ini —
-        // baru benar-benar ditentukan saat pasien mendaftar kunjungan di loket.
-        // Kolom ini NOT NULL di database, jadi diisi default 'umum' supaya tidak gagal;
-        // nanti akan ditimpa/dipilih ulang saat pendaftaran kunjungan sesungguhnya.
-        kategori_pasien: 'umum',
-        wilayah: 'dalam',
+        // Data bayi baru lahir (sebelumnya hanya tersimpan di mode edit)
+        is_bayi_baru_lahir: !!formPasienRak.is_bayi_baru_lahir,
+        nama_bayi: formPasienRak.is_bayi_baru_lahir
+          ? formPasienRak.nama_bayi?.trim() || null
+          : null,
+        nik_ibu_kandung: formPasienRak.is_bayi_baru_lahir
+          ? formPasienRak.nik_ibu_kandung?.trim() || null
+          : null,
+        jam_lahir: formPasienRak.is_bayi_baru_lahir
+          ? formPasienRak.jam_lahir || null
+          : null,
+        no_telepon_pengantar: formPasienRak.is_bayi_baru_lahir
+          ? formPasienRak.no_telepon_pengantar?.trim() || null
+          : null,
       }
 
       if (pasienExisting) {
+        // Pasien sudah ada: JANGAN sentuh kategori_pasien / wilayah. Keduanya
+        // sudah ditentukan saat pendaftaran kunjungan (BPJS / Umum / Asuransi
+        // Lainnya; dalam / luar wilayah) dan tidak boleh ditimpa balik ke
+        // default hanya karena biodata dicatat ulang lewat rak.
         const { error: updateErr } = await supabase
           .from('pasien')
           .update(payload)
           .eq('id', pasienExisting.id)
         if (updateErr) throw new Error(updateErr.message)
       } else {
-        const { error: insertErr } = await supabase.from('pasien').insert(payload)
+        // Pasien baru: kategori_pasien NOT NULL di database, jadi diisi default
+        // 'umum' supaya tidak gagal; nanti dipilih ulang saat pendaftaran
+        // kunjungan sesungguhnya di loket.
+        const { error: insertErr } = await supabase
+          .from('pasien')
+          .insert({ ...payload, kategori_pasien: 'umum', wilayah: 'dalam' })
         if (insertErr) throw new Error(insertErr.message)
       }
 
@@ -714,6 +1049,7 @@ export default function DashboardLoket() {
       total: rows.length,
       bpjs: rows.filter((r) => r.kategori_pasien === 'bpjs').length,
       umum: rows.filter((r) => r.kategori_pasien === 'umum').length,
+      asuransi_lainnya: rows.filter((r) => r.kategori_pasien === 'asuransi_lainnya').length,
       menunggu: rows.filter((r) => r.status === 'menunggu' || r.status_panggil === 'menunggu').length,
       selesai: rows.filter((r) => r.status === 'selesai').length,
     })
@@ -840,6 +1176,7 @@ export default function DashboardLoket() {
         poli:poli_id ( nama_poli )
       `)
       .eq('pasien_id', pasienId)
+      .neq('status', 'batal')
       .order('tanggal_periksa', { ascending: false })
       .order('created_at', { ascending: false })
 
@@ -849,6 +1186,38 @@ export default function DashboardLoket() {
       return
     }
     setRiwayatPasien(data || [])
+  }
+
+  // Lihat riwayat pemeriksaan langsung dari modal Kelola Rak (daftar anggota
+  // keluarga per No. RM). Read-only saja — tidak membuka form pendaftaran,
+  // beda dengan tombol 🩺 PERIKSA yang lanjut ke wizard poli/petugas.
+  async function bukaRiwayatPasienRak(pasien) {
+    setPasienRiwayatDilihat(pasien)
+    setRiwayatRakPasien([])
+    setRiwayatRakLoading(true)
+    const { data, error } = await supabase
+      .from('kunjungan')
+      .select(`
+        id, tanggal_periksa, kategori_pasien, status, status_prioritas, created_at,
+        anamnesa, diagnosa, therapy_tindakan, icd_x, paraf,
+        poli:poli_id ( nama_poli )
+      `)
+      .eq('pasien_id', pasien.id)
+      .neq('status', 'batal')
+      .order('tanggal_periksa', { ascending: false })
+      .order('created_at', { ascending: false })
+
+    setRiwayatRakLoading(false)
+    if (error) {
+      console.error('Error fetch riwayat pasien (rak):', error.message)
+      return
+    }
+    setRiwayatRakPasien(data || [])
+  }
+
+  function tutupRiwayatPasienRak() {
+    setPasienRiwayatDilihat(null)
+    setRiwayatRakPasien([])
   }
 
   function lanjutkanPasienLama(kategori) {
@@ -863,10 +1232,12 @@ export default function DashboardLoket() {
       tempat_lahir: pasienTerpilih.tempat_lahir || '',
       tanggal_lahir: pasienTerpilih.tanggal_lahir || '',
       jenis_kelamin: pasienTerpilih.jenis_kelamin || '',
-      pekerjaan: pasienTerpilih.pekerjaan || '',
+      pekerjaan: normalisasiPekerjaan(pasienTerpilih.pekerjaan),
       alamat: pasienTerpilih.alamat || '',
       no_nik: pasienTerpilih.no_nik || '',
       no_bpjs: pasienTerpilih.no_bpjs || '',
+      no_asuransi: pasienTerpilih.no_asuransi || '',
+      nama_asuransi: pasienTerpilih.nama_asuransi || '',
       no_kk: pasienTerpilih.no_kk || '',
       nama_kepala_keluarga: pasienTerpilih.nama_kepala_keluarga || '',
       urutan_kk: pasienTerpilih.urutan_kk != null ? String(pasienTerpilih.urutan_kk) : '',
@@ -904,10 +1275,12 @@ export default function DashboardLoket() {
       tempat_lahir: pasien.tempat_lahir || '',
       tanggal_lahir: pasien.tanggal_lahir || '',
       jenis_kelamin: pasien.jenis_kelamin || '',
-      pekerjaan: pasien.pekerjaan || '',
+      pekerjaan: normalisasiPekerjaan(pasien.pekerjaan),
       alamat: pasien.alamat || '',
       no_nik: pasien.no_nik || '',
       no_bpjs: pasien.no_bpjs || '',
+      no_asuransi: pasien.no_asuransi || '',
+      nama_asuransi: pasien.nama_asuransi || '',
       no_kk: pasien.no_kk || '',
       nama_kepala_keluarga: pasien.nama_kepala_keluarga || '',
       urutan_kk: pasien.urutan_kk != null ? String(pasien.urutan_kk) : '',
@@ -966,9 +1339,11 @@ export default function DashboardLoket() {
       tempat_lahir: pasienLama.tempat_lahir || prev.tempat_lahir,
       tanggal_lahir: pasienLama.tanggal_lahir || prev.tanggal_lahir,
       jenis_kelamin: pasienLama.jenis_kelamin || prev.jenis_kelamin,
-      pekerjaan: pasienLama.pekerjaan || prev.pekerjaan,
+      pekerjaan: normalisasiPekerjaan(pasienLama.pekerjaan) || prev.pekerjaan,
       alamat: pasienLama.alamat || prev.alamat,
       no_bpjs: pasienLama.no_bpjs || prev.no_bpjs,
+      no_asuransi: pasienLama.no_asuransi || prev.no_asuransi,
+      nama_asuransi: pasienLama.nama_asuransi || prev.nama_asuransi,
       no_kk: pasienLama.no_kk || prev.no_kk,
       nama_kepala_keluarga: pasienLama.nama_kepala_keluarga || prev.nama_kepala_keluarga,
       urutan_kk: pasienLama.urutan_kk != null ? String(pasienLama.urutan_kk) : prev.urutan_kk,
@@ -1107,18 +1482,24 @@ export default function DashboardLoket() {
   // tidak akan cocok dan update gagal (0 baris berubah -> error 406 dari
   // .single() karena PostgREST mengharapkan tepat 1 baris hasil).
   async function generateNoRmDariRak(rakId) {
-    const rak = rakList.find((r) => r.id === rakId)
-    if (!rak) return ''
-
-    // Ambil nilai TERBARU langsung dari DB, bukan dari state lokal yang bisa basi.
+    // PERBAIKAN BUG: sebelumnya kode_rak diambil dari state React `rakList`
+    // (rakList.find), yang bisa saja belum ter-update (race condition, mis.
+    // rak baru saja dibuat dan fetchRakList belum sempat selesai) sehingga
+    // pencarian gagal dan fungsi ini diam-diam return '' — akibatnya No. RM
+    // otomatis macet menampilkan placeholder '...' terus di form Tambah
+    // Pasien, sampai state rakList "dipaksa" refresh (mis. lewat tombol
+    // Sinkronkan Nomor Urut, yang sebenarnya tidak dirancang untuk itu).
+    // Sekarang kode_rak & nomor_urut_terakhir SELALU dibaca langsung dari
+    // database dalam satu query yang sama, jadi tidak bergantung sama
+    // sekali pada state lokal yang mungkin basi.
     const { data: rakTerbaru, error: rakErr } = await supabase
       .from('rak_rm')
-      .select('nomor_urut_terakhir')
+      .select('kode_rak, nomor_urut_terakhir')
       .eq('id', rakId)
       .maybeSingle()
 
     if (rakErr || !rakTerbaru) {
-      console.error('Gagal membaca nomor_urut_terakhir terbaru:', rakErr?.message)
+      console.error('Gagal membaca data rak terbaru:', rakErr?.message)
       return ''
     }
 
@@ -1149,7 +1530,7 @@ export default function DashboardLoket() {
     setRakList((prev) => prev.map((r) => (r.id === rakId ? { ...r, nomor_urut_terakhir: nomorBaru } : r)))
 
     const urut = String(nomorBaru).padStart(4, '0')
-    return `${rak.kode_rak}-${urut}`
+    return `${rakTerbaru.kode_rak}-${urut}`
   }
 
   // Dipanggil saat petugas memilih rak di form pendaftaran
@@ -1270,7 +1651,7 @@ export default function DashboardLoket() {
       }
       if (!form.kategori_pasien) {
         setErrorFieldId('field-kategori_pasien')
-        throw new Error('Kategori pasien (Umum/BPJS) wajib dipilih.')
+        throw new Error('Kategori pasien (BPJS/Umum/Asuransi Lainnya) wajib dipilih.')
       }
       if (form.kategori_pasien === 'bpjs' && form.status_bpjs_aktif === null) {
         setErrorFieldId('field-status_bpjs_aktif')
@@ -1291,6 +1672,16 @@ export default function DashboardLoket() {
       if (form.kategori_pasien === 'bpjs' && !form.no_bpjs.trim()) {
         setErrorFieldId('field-no_bpjs')
         throw new Error('Nomor BPJS wajib diisi untuk pasien BPJS.')
+      }
+      if (form.kategori_pasien === 'asuransi_lainnya') {
+        if (!form.nama_asuransi.trim()) {
+          setErrorFieldId('field-nama_asuransi')
+          throw new Error('Nama asuransi wajib diisi (mis. Jasa Raharja).')
+        }
+        if (!form.no_asuransi.trim()) {
+          setErrorFieldId('field-no_asuransi')
+          throw new Error('Nomor kartu/polis asuransi wajib diisi.')
+        }
       }
       if (form.no_nik && validasiNik(form.no_nik).status === 'invalid') {
         setErrorFieldId('field-no_nik')
@@ -1316,6 +1707,16 @@ export default function DashboardLoket() {
         no_bpjs: form.no_bpjs.trim() || null,
         no_kk: form.no_kk.trim() || null,
         nama_kepala_keluarga: form.nama_kepala_keluarga.trim() || null,
+        // Data polis hanya ditulis kalau kunjungan ini memang berkategori
+        // Asuransi Lainnya. Untuk kategori lain, kolom TIDAK disertakan sama
+        // sekali (bukan diisi null) supaya polis pasien yang sudah tersimpan
+        // tidak terhapus saat ia berobat sebagai BPJS/Umum di kunjungan lain.
+        ...(form.kategori_pasien === 'asuransi_lainnya'
+          ? {
+              no_asuransi: form.no_asuransi.trim() || null,
+              nama_asuransi: form.nama_asuransi.trim() || null,
+            }
+          : {}),
       }
 
       if (!pasienId) {
@@ -1390,6 +1791,16 @@ export default function DashboardLoket() {
 
       if (kunjunganErr) throw new Error(kunjunganErr.message)
 
+      // Fitur General Consent: dipicu di sini (bukan di-await/blocking) karena
+      // loket tidak boleh menunggu proses consent untuk lanjut cetak tiket /
+      // melayani pasien berikutnya. Modal form/QR consent muncul di atas alur
+      // ini secara independen lewat globalLoketModals.
+      consentLoket.mulaiConsent(
+        { id: pasienId, nama_lengkap: form.nama_lengkap.trim() },
+        kunjunganData.id,
+        profile.instansi_id
+      )
+
       // Retribusi: kalau pasien Umum atau BPJS-tidak-aktif, catat tagihan
       // loket otomatis (snapshot nominal saat ini, akumulatif dengan
       // tagihan poli/lab yang akan ditambahkan nanti untuk kunjungan yang
@@ -1457,100 +1868,465 @@ export default function DashboardLoket() {
   const nikCheck = validasiNik(form.no_nik)
   const umurInfo = kategoriUmur(form.tanggal_lahir)
 
+  // Props bersama untuk ModalKelolaRak — didefinisikan sekali di sini supaya
+  // bisa dipakai ulang di step manapun (kategori, cari, form pendaftaran)
+  // tanpa duplikasi ~50 baris props tiap kali dipanggil.
+  const rakModalProps = {
+    show: showKelolaRak,
+    onClose: () => {
+      setShowKelolaRak(false)
+      setRakForm({ id: null, kode_rak: '', nama_rak: '' })
+      setRakError('')
+    },
+    rakList,
+    rakForm,
+    setRakForm,
+    rakLoading,
+    rakError,
+    onSubmit: simpanRak,
+    onEdit: editRak,
+    onDelete: hapusRak,
+    onPisahkanRmBaru: pisahkanKeRmBaru,
+    onSinkronSemua: sinkronkanSemuaRak,
+    instansiId: profile?.instansi_id,
+    pasienRakBaru,
+    editPasienRakId,
+    onBukaTambahPasien: bukaTambahPasienRak,
+    onEditPasienRak: bukaEditPasienRak,
+    onTambahAnggotaGrup: bukaTambahAnggotaGrupRak,
+    onLihatRiwayatPasien: bukaRiwayatPasienRak,
+    onHapusPasienRak: hapusPasienRak,
+    onTutupTambahPasien: tutupTambahPasienRak,
+    formPasienRak,
+    onChangeFormPasienRak: handleChangeFormPasienRak,
+    onSubmitPasienRak: simpanPasienRak,
+    pasienRakLoading,
+    pasienRakError,
+    anggotaKkRak,
+    onCekNoKkRak: cekNoKkRak,
+    cekKkRakLoading,
+    refPasienRakNama,
+    refPasienRakNoRm,
+    refPasienRakNik,
+    refPasienRakNikPendamping,
+    onFotoPasienRakChange: handleFotoPasienRakChange,
+    onSimpanFotoPasienRak: simpanFotoPasienRak,
+    onHapusFotoPasienRak: hapusFotoPasienRak,
+    fotoPreviewUrlRak,
+    fotoUploadingRak,
+    fotoPendingBlobRak,
+    refPasienRakTanggalLahir,
+    refPasienRakJenisKelamin,
+    popupValidasi: popupValidasiPasienRak,
+    onTutupPopupValidasi: () => setPopupValidasiPasienRak(null),
+    onPeriksaPasienRak: periksaPasienDariRak,
+    polis,
+    petugasPoliList,
+    onRefreshPetugasPoli: () => profile?.instansi_id && fetchPetugasPoli(profile.instansi_id),
+    tarifLoket,
+  }
+
+  const retribusiModalProps = {
+    show: showModalRetribusi,
+    onClose: () => setShowModalRetribusi(false),
+    instansiId: profile?.instansi_id,
+    instansi: profile?.instansi,
+    petugasId: profile?.id,
+  }
+
+  // Satu-satunya pintu masuk untuk navigasi lewat BottomBar. Menjamin hanya
+  // SATU halaman/overlay yang aktif dalam satu waktu: setiap kali salah satu
+  // menu BottomBar diklik, semua step & modal lain ditutup dulu, baru target
+  // yang diminta dibuka. Tanpa ini, klik menu lain saat sedang di halaman
+  // step lain (mis. 'cek-antrian') akan membuat modal baru numpuk di atas
+  // halaman step yang masih terpasang, bukan menggantikannya.
+  //
+  // LoadingOverlay ditampilkan singkat (350ms) di setiap perpindahan supaya
+  // jeda render/fetch data terasa sebagai proses, bukan macet.
+  const LABEL_BOTTOM_BAR = {
+    home: 'Memuat Dashboard…',
+    'cek-antrian': 'Memuat Cek Antrian…',
+    'rak-rm': 'Memuat Rak Rekam Medis…',
+    retribusi: 'Memuat Retribusi…',
+    riwayat: 'Memuat Riwayat Pendaftaran…',
+  }
+
+  function bukaHalamanBottomBar(tujuan) {
+    // Batalkan timer sebelumnya kalau user klik menu lain sebelum timer
+    // pertama selesai — tanpa ini, dua setTimeout bisa jalan bertumpuk dan
+    // salah satunya menimpa state secara tidak berurutan.
+    if (bottomBarTimeoutRef.current) {
+      clearTimeout(bottomBarTimeoutRef.current)
+    }
+
+    setLoadingBottomBar(LABEL_BOTTOM_BAR[tujuan] || 'Memuat…')
+
+    bottomBarTimeoutRef.current = setTimeout(() => {
+      setStep('kategori')
+      setShowKelolaRak(false)
+      setShowModalRetribusi(false)
+      setShowRiwayatPendaftaran(false)
+      setShowArsipConsent(false)
+      setShowKonfirmasiLogout(false)
+
+      if (tujuan === 'cek-antrian') {
+        setStep('cek-antrian')
+      } else if (tujuan === 'rak-rm') {
+        setShowKelolaRak(true)
+      } else if (tujuan === 'retribusi') {
+        setShowModalRetribusi(true)
+      } else if (tujuan === 'riwayat') {
+        setShowRiwayatPendaftaran(true)
+      }
+      // tujuan === 'home' tidak butuh cabang khusus: setStep('kategori') di atas sudah cukup.
+
+      setLoadingBottomBar(null)
+      bottomBarTimeoutRef.current = null
+    }, 350)
+  }
+
+  // Menu Riwayat + Bottom Bar — dipakai bersama di setiap step
+  // petugas loket (kategori, cari, form pendaftaran) supaya navigasi bawah
+  // konsisten tanpa perlu pindah halaman dulu.
+  // PENTING: ini SENGAJA berupa variabel JSX biasa (bukan `function GlobalLoketModals() {...}`).
+  // Kalau ini didefinisikan sebagai fungsi komponen di dalam body DashboardLoket, React akan
+  // menganggapnya sebagai TIPE KOMPONEN BARU setiap kali DashboardLoket re-render (mis. dari
+  // realtime subscription / auto-refresh 30 detik) — akibatnya <ModalKelolaRak> di dalamnya
+  // ikut di-unmount+mount ulang, dan semua useState internalnya (termasuk wizard "Periksa
+  // Pasien": pasienPeriksaDipilih, langkahPeriksa) ikut RESET. Itulah sebab bug "wizard Periksa
+  // muncul sebentar lalu hilang sendiri". Dengan variabel JSX biasa, elemen <ModalKelolaRak>
+  // tetap dikenali sebagai instance yang sama antar render, jadi state-nya tidak ke-reset.
+  const globalLoketModals = (
+    <>
+      {loadingBottomBar && <LoadingOverlay label={loadingBottomBar} />}
+
+        <ModalRetribusi {...retribusiModalProps} />
+
+        <ModalFormConsent
+          show={consentLoket.showFormConsent}
+          pasien={consentLoket.pasienAktif}
+          checklistDefault={consentLoket.checklistDefault}
+          loading={consentLoket.loadingConsent}
+          error={consentLoket.errorConsent}
+          onSimpan={(isiForm) => consentLoket.simpanFormConsent(isiForm, profile.id, profile.nama_lengkap)}
+          onBatal={consentLoket.batalkanFormConsent}
+        />
+
+        <ModalQrConsent
+          show={consentLoket.showQrConsent}
+          pasien={consentLoket.pasienAktif}
+          consent={consentLoket.consentAktif}
+          onTutup={consentLoket.tutupQrConsent}
+        />
+
+        {showArsipConsent && (
+          <div
+            className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center sm:p-4"
+            onClick={() => setShowArsipConsent(false)}
+          >
+            <div
+              className="bg-white sm:rounded-2xl shadow-xl w-full h-full sm:h-[85vh] sm:max-w-3xl flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 px-4 sm:px-5 py-3 sm:py-4 shrink-0 border-b border-gray-200">
+                <button
+                  type="button"
+                  onClick={() => setShowArsipConsent(false)}
+                  aria-label="Kembali"
+                  className="sm:hidden shrink-0 p-1.5 -ml-1.5 rounded-lg text-gray-500 touch-manipulation"
+                >
+                  <i className="ti ti-arrow-left text-lg" aria-hidden="true"></i>
+                </button>
+                <p className="font-semibold text-gray-800 text-sm sm:text-base flex-1 text-center sm:text-left">
+                  Berkas General Consent
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowArsipConsent(false)}
+                  className="hidden sm:block text-xs px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 shrink-0"
+                >
+                  Tutup
+                </button>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5">
+                <ArsipGeneralConsent />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showRiwayatPendaftaran && (
+          <div
+            className="fixed inset-0 z-[70] bg-black/40 flex items-center justify-center sm:p-4"
+            onClick={() => setShowRiwayatPendaftaran(false)}
+          >
+            <div
+              className="bg-white sm:rounded-2xl shadow-xl w-full h-full sm:h-[85vh] sm:max-w-5xl flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 px-4 sm:px-5 py-3 sm:py-4 shrink-0 border-b border-gray-200">
+                <button
+                  type="button"
+                  onClick={() => setShowRiwayatPendaftaran(false)}
+                  aria-label="Kembali"
+                  className="sm:hidden shrink-0 p-1.5 -ml-1.5 rounded-lg text-gray-500 touch-manipulation"
+                >
+                  <i className="ti ti-arrow-left text-lg" aria-hidden="true"></i>
+                </button>
+                <p className="font-semibold text-gray-800 text-sm sm:text-base flex-1 text-center sm:text-left">
+                  Riwayat Pendaftaran
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowRiwayatPendaftaran(false)}
+                  className="hidden sm:block text-xs px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 shrink-0"
+                >
+                  Tutup
+                </button>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5">
+                <RiwayatPendaftaran instansiId={profile?.instansi_id} instansi={profile?.instansi} />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showKonfirmasiLogout && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+            onClick={() => setShowKonfirmasiLogout(false)}
+          >
+            <div
+              className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 text-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-3xl">
+                🚪
+              </div>
+              <p className="text-sm font-semibold text-gray-800 mb-1">Keluar dari akun?</p>
+              <p className="text-sm text-gray-500 mb-5">
+                Anda akan keluar dari sesi loket ini dan harus login kembali untuk melanjutkan.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowKonfirmasiLogout(false)}
+                  className="flex-1 rounded-lg border border-gray-300 text-gray-600 text-sm font-medium py-2.5 hover:bg-gray-50 transition"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={signOut}
+                  className="flex-1 rounded-lg bg-red-600 text-white text-sm font-medium py-2.5 hover:bg-red-700 transition"
+                >
+                  Ya, Keluar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+      <BottomBar
+        onHome={() => bukaHalamanBottomBar('home')}
+        onCekAntrian={() => bukaHalamanBottomBar('cek-antrian')}
+        onRakRekamMedis={() => bukaHalamanBottomBar('rak-rm')}
+        onRetribusi={() => bukaHalamanBottomBar('retribusi')}
+        onRiwayatPendaftaran={() => bukaHalamanBottomBar('riwayat')}
+      />
+
+      {/* Modal riwayat pemeriksaan (read-only) — dibuka dari tombol 📋 Riwayat
+          di daftar anggota keluarga pada modal Kelola Rak. Ditaruh di dalam
+          globalLoketModals (bukan lagi duplikat manual di tiap cabang render)
+          supaya tetap muncul juga saat showKelolaRak true — sebelumnya modal
+          ini hanya dirender di cabang-cabang yang TIDAK termasuk early-return
+          `if (showKelolaRak) return (...)`, jadi klik tombol Riwayat di dalam
+          Modal Kelola Rak berhasil mengambil data tapi modalnya tidak pernah
+          tampil ("tombol riwayat tidak bisa diklik"). */}
+      {pasienRiwayatDilihat && (
+        <div
+          className="fixed inset-0 z-[95] bg-black/40 flex items-center justify-center sm:p-6"
+          onClick={tutupRiwayatPasienRak}
+        >
+          <div
+            className="bg-white flex flex-col w-full h-full sm:h-auto sm:rounded-2xl shadow-xl sm:max-w-3xl sm:max-h-[90vh]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 shrink-0 border-b border-gray-200">
+              <button
+                type="button"
+                onClick={tutupRiwayatPasienRak}
+                aria-label="Kembali"
+                className="sm:hidden shrink-0 p-1.5 -ml-1.5 rounded-lg text-gray-500 touch-manipulation"
+              >
+                <i className="ti ti-arrow-left text-lg" aria-hidden="true"></i>
+              </button>
+              <div className="min-w-0 flex-1 text-center sm:text-left">
+                <p className="text-xs sm:text-sm text-gray-500">Riwayat pemeriksaan</p>
+                <p className="font-bold text-gray-800 text-base sm:text-lg truncate">
+                  {pasienRiwayatDilihat.nama_lengkap}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={tutupRiwayatPasienRak}
+                aria-label="Tutup"
+                className="hidden sm:flex shrink-0 p-1.5 rounded-lg text-gray-400 hover:text-gray-600 touch-manipulation"
+              >
+                <i className="ti ti-x text-lg" aria-hidden="true"></i>
+              </button>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 text-center">
+              <TabelRiwayatPemeriksaan
+                riwayat={riwayatRakPasien}
+                loading={riwayatRakLoading}
+                dataPasien={pasienRiwayatDilihat}
+                instansi={profile?.instansi}
+                profile={profile}
+                bukaOtomatis
+              />
+            </div>
+
+            <div className="shrink-0 p-4 sm:px-6 sm:pb-6 sm:pt-0">
+              <button
+                onClick={tutupRiwayatPasienRak}
+                className="w-full py-2.5 sm:py-2 rounded-lg border border-gray-300 text-gray-600 text-sm font-semibold"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+
+  // ─── TAMPILAN RAK REKAM MEDIS (halaman penuh, dipakai lintas step) ─────────
+  // Ditampilkan menimpa step manapun yang sedang aktif selama showKelolaRak true,
+  // sama seperti pola tampilan step === 'cek-antrian' di bawah — bukan lagi
+  // modal overlay kecil, supaya ukurannya konsisten dengan halaman Cek Antrian.
+  if (showKelolaRak) {
+    return (
+      <>
+        <ModalKelolaRak {...rakModalProps} />
+        {globalLoketModals}
+      </>
+    )
+  }
+
   // ─── TAMPILAN PILIH KATEGORI (+ DASHBOARD) ─────────────────
 
   if (step === 'kategori') {
     return (
-      <div className="min-h-screen bg-gray-50 p-6">
+      <div className="min-h-screen bg-gray-50 p-3 sm:p-6 pb-40 sm:pb-44">
         <div className="max-w-7xl mx-auto">
 
-          <div className="mb-6 text-center">
-            <h1 className="text-2xl font-bold text-gray-800">Pendaftaran Pasien</h1>
-            <p className="text-gray-500 mt-1">{profile?.instansi?.nama || ''}</p>
-            <p className="text-xs text-gray-400 mt-1">
+          <button
+            type="button"
+            onClick={() => setShowKonfirmasiLogout(true)}
+            aria-label="Keluar"
+            className="fixed top-4 right-4 z-[60] flex items-center justify-center w-11 h-11 text-white rounded-full shadow-lg backdrop-blur-sm transition touch-manipulation"
+            style={{ background: '#dc2626' }}
+          >
+            <i className="ti ti-logout text-xl" aria-hidden="true"></i>
+          </button>
+
+          <div className="mb-4 sm:mb-6 text-center">
+            <h1 className="text-lg sm:text-2xl font-bold text-gray-800">Pendaftaran Pasien</h1>
+            <p className="text-sm sm:text-base text-gray-500 mt-1">{profile?.instansi?.nama || ''}</p>
+            <p className="hidden sm:block text-xs text-gray-400 mt-1">
               Shortcut: <b>Esc</b> Kembali · <b>Ctrl+S</b> Simpan
             </p>
           </div>
 
           {sukses && tiketAntrian && (
-            <div className="mb-6 max-w-md mx-auto bg-white border-2 border-dashed border-teal-400 rounded-xl px-8 py-5 text-center shadow-sm">
-              <p className="text-sm text-gray-500">✅ Pasien berhasil didaftarkan</p>
+            <div className="mb-4 sm:mb-6 max-w-md mx-auto bg-white border-2 border-dashed border-teal-400 rounded-xl px-5 sm:px-8 py-5 text-center shadow-sm">
+              <p className="text-sm text-gray-500 flex items-center justify-center gap-1.5">
+                <i className="ti ti-circle-check text-teal-600" aria-hidden="true"></i>
+                Pasien berhasil didaftarkan
+              </p>
               <p className="text-xs text-gray-400 mt-1">{tiketAntrian.namaPoli}</p>
-              <p className="text-5xl font-bold text-teal-600 mt-2 tracking-wide">{tiketAntrian.nomor}</p>
+              <p className="text-4xl sm:text-5xl font-bold text-teal-600 mt-2 tracking-wide">{tiketAntrian.nomor}</p>
               <p className="text-xs text-gray-400 mt-1">Nomor Antrian Anda</p>
               {tiketAntrian.totalTagihanLoket > 0 && (
-                <p className="text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">
-                  💵 Retribusi Loket: Rp {tiketAntrian.totalTagihanLoket.toLocaleString('id-ID')}
+                <p className="text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3 flex items-center justify-center gap-1.5">
+                  <i className="ti ti-cash" aria-hidden="true"></i>
+                  Retribusi Loket: Rp {tiketAntrian.totalTagihanLoket.toLocaleString('id-ID')}
                 </p>
               )}
               <button
                 onClick={() => cetakTiket(tiketAntrian, profile?.instansi?.nama)}
-                className="mt-3 text-xs px-4 py-1.5 rounded-full bg-teal-600 text-white hover:bg-teal-700"
+                className="mt-3 text-xs px-4 py-2 rounded-full bg-teal-600 text-white hover:bg-teal-700 touch-manipulation inline-flex items-center gap-1.5"
               >
-                🖨️ Cetak Ulang Tiket
+                <i className="ti ti-printer" aria-hidden="true"></i>
+                Cetak Ulang Tiket
               </button>
             </div>
           )}
 
-          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-6">
 
             {/* ── Kolom kiri: aksi utama ── */}
-            <div className="xl:col-span-2 space-y-6">
-              <div className="bg-white rounded-2xl shadow-sm p-6">
-                <p className="text-gray-600 mb-4 font-medium">Menu loket:</p>
-                <div className="grid grid-cols-5 gap-3 sm:gap-6">
-                  <button
-                    onClick={() => {
-                      const url = new URL(window.location.href)
-                      url.searchParams.set('view', 'antrian')
-                      window.open(url.toString(), '_blank')
-                    }}
-                    className="aspect-square rounded-2xl bg-gray-700 hover:bg-gray-800 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition p-2"
-                  >
-                    <span className="text-4xl">📺</span>
-                    <span className="text-lg font-bold">ANTRIAN</span>
-                  </button>
+            <div className="xl:col-span-2 space-y-4 sm:space-y-6">
+              <div className="bg-white rounded-2xl shadow-sm p-4 sm:p-6">
+                <button
+                  onClick={() => {
+                    const url = new URL(window.location.href)
+                    url.searchParams.set('view', 'antrian')
+                    window.open(url.toString(), '_blank')
+                  }}
+                  className="w-full rounded-2xl bg-blue-50 hover:bg-blue-100 active:opacity-80 text-blue-700 flex flex-col items-center justify-center gap-1.5 transition py-4 px-2 touch-manipulation"
+                >
+                  <i className="ti ti-device-tv text-2xl sm:text-3xl" aria-hidden="true"></i>
+                  <span className="text-xs sm:text-sm font-semibold">Antrian</span>
+                </button>
+              </div>
 
-                  <button
-                    onClick={() => setStep('cek-antrian')}
-                    className="aspect-square rounded-2xl bg-purple-600 hover:bg-purple-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition p-2"
-                  >
-                    <span className="text-4xl">📱</span>
-                    <span className="text-lg font-bold text-center leading-tight">CEK ANTRIAN</span>
-                  </button>
+              <div className="bg-white rounded-2xl shadow-sm p-4 sm:p-6">
+                <button
+                  onClick={() => setShowArsipConsent(true)}
+                  className="w-full rounded-2xl bg-teal-50 hover:bg-teal-100 active:opacity-80 text-teal-700 flex flex-col items-center justify-center gap-1.5 transition py-4 px-2 touch-manipulation"
+                >
+                  <i className="ti ti-file-text text-2xl sm:text-3xl" aria-hidden="true"></i>
+                  <span className="text-xs sm:text-sm font-semibold">Berkas General Consent</span>
+                </button>
+              </div>
 
-                  {/* Rak Rekam Medis — kelola kode rak sendiri */}
-                  <button
-                    onClick={() => setShowKelolaRak(true)}
-                    className="aspect-square rounded-2xl bg-amber-600 hover:bg-amber-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition p-2"
-                  >
-                    <span className="text-4xl">🗄️</span>
-                    <span className="text-lg font-bold text-center leading-tight">RAK REKAM MEDIS</span>
-                  </button>
-
-                  {/* Retribusi — rekap & setor retribusi pasien umum */}
-                  <button
-                    onClick={() => setShowModalRetribusi(true)}
-                    className="aspect-square rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition p-2"
-                  >
-                    <span className="text-4xl">💵</span>
-                    <span className="text-lg font-bold text-center leading-tight">RETRIBUSI</span>
-                  </button>
-
-                  {/* Logout — keluar dari akun */}
-                  <button
-                    onClick={() => setShowKonfirmasiLogout(true)}
-                    className="aspect-square rounded-2xl bg-red-600 hover:bg-red-700 text-white flex flex-col items-center justify-center gap-2 shadow-lg transition p-2"
-                  >
-                    <span className="text-4xl">🚪</span>
-                    <span className="text-lg font-bold text-center leading-tight">LOGOUT</span>
-                  </button>
+              {/* FITUR 2 (mobile): Statistik dipindah lebih atas supaya terlihat tanpa scroll panjang */}
+              <div className="bg-white rounded-2xl shadow-sm p-4 sm:p-6 xl:hidden">
+                <h2 className="font-semibold text-gray-700 mb-3 text-sm sm:text-base">Statistik Hari Ini</h2>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-gray-50 rounded-xl p-3 text-center">
+                    <p className="text-xs text-gray-400">Total Pasien</p>
+                    <p className="text-xl sm:text-2xl font-bold text-gray-800">{stats.total}</p>
+                  </div>
+                  <div className="bg-blue-50 rounded-xl p-3 text-center">
+                    <p className="text-xs text-blue-400">BPJS</p>
+                    <p className="text-xl sm:text-2xl font-bold text-blue-700">{stats.bpjs}</p>
+                  </div>
+                  <div className="bg-teal-50 rounded-xl p-3 text-center">
+                    <p className="text-xs text-teal-500">Umum</p>
+                    <p className="text-xl sm:text-2xl font-bold text-teal-700">{stats.umum}</p>
+                  </div>
+                  <div className="bg-purple-50 rounded-xl p-3 text-center">
+                    <p className="text-xs text-purple-400">Asuransi Lainnya</p>
+                    <p className="text-xl sm:text-2xl font-bold text-purple-700">{stats.asuransi_lainnya}</p>
+                  </div>
+                  <div className="bg-yellow-50 rounded-xl p-3 text-center">
+                    <p className="text-xs text-yellow-500">Menunggu</p>
+                    <p className="text-xl sm:text-2xl font-bold text-yellow-700">{stats.menunggu}</p>
+                  </div>
+                  <div className="bg-green-50 rounded-xl p-3 text-center col-span-2">
+                    <p className="text-xs text-green-500">Selesai</p>
+                    <p className="text-xl sm:text-2xl font-bold text-green-700">{stats.selesai}</p>
+                  </div>
                 </div>
               </div>
 
               {/* FITUR 3: Ringkasan Antrian per Poli */}
-              <div className="bg-white rounded-2xl shadow-sm p-6">
-                <h2 className="font-semibold text-gray-700 mb-3">Ringkasan Antrian per Poli</h2>
+              <div className="bg-white rounded-2xl shadow-sm p-4 sm:p-6">
+                <h2 className="font-semibold text-gray-700 mb-3 text-sm sm:text-base">Ringkasan Antrian per Poli</h2>
                 {antrianPoli.length === 0 ? (
                   <p className="text-sm text-gray-400">Belum ada data antrian hari ini.</p>
                 ) : (
@@ -1559,7 +2335,7 @@ export default function DashboardLoket() {
                       <div key={p.poli_id} className="border rounded-xl p-3">
                         <p className="text-sm font-medium text-gray-700">{p.nama_poli}</p>
                         <p className="text-xs text-gray-400 mt-1">Berjalan</p>
-                        <p className="text-2xl font-bold text-teal-600">{p.berjalan || '-'}</p>
+                        <p className="text-xl sm:text-2xl font-bold text-teal-600">{p.berjalan || '-'}</p>
                         <p className="text-xs text-gray-400 mt-1">Menunggu: <b>{p.menunggu}</b></p>
                       </div>
                     ))}
@@ -1567,12 +2343,29 @@ export default function DashboardLoket() {
                 )}
               </div>
 
-              {/* FITUR 5: Riwayat Pendaftaran (filter periode + rekap + download) */}
-              <RiwayatPendaftaran instansiId={profile?.instansi_id} instansi={profile?.instansi} />
+              {/* FITUR 10 (mobile): Monitoring Loket dipindah ke flow utama */}
+              <div className="bg-white rounded-2xl shadow-sm p-4 sm:p-6 xl:hidden">
+                <h2 className="font-semibold text-gray-700 mb-3 text-sm sm:text-base">Monitoring Loket</h2>
+                {monitoringLoket.length === 0 ? (
+                  <p className="text-sm text-gray-400">Belum ada aktivitas loket hari ini.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {monitoringLoket.map((l) => (
+                      <div key={l.loket_id} className="flex items-center justify-between border rounded-lg px-3 py-2.5">
+                        <span className="text-sm text-gray-600">{l.nama}</span>
+                        <span className="text-sm font-bold text-teal-600">{l.jumlah} pasien</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* FITUR 5: Riwayat Pendaftaran sekarang diakses lewat modal
+                  (tombol Riwayat di Bottom Bar), tidak lagi ditampilkan inline di sini. */}
             </div>
 
-            {/* ── Kolom kanan: statistik & monitoring ── */}
-            <div className="space-y-6">
+            {/* ── Kolom kanan (desktop only ≥xl): statistik & monitoring ── */}
+            <div className="hidden xl:block space-y-6">
               {/* FITUR 2: Statistik Dashboard Hari Ini */}
               <div className="bg-white rounded-2xl shadow-sm p-6">
                 <h2 className="font-semibold text-gray-700 mb-3">Statistik Hari Ini</h2>
@@ -1588,6 +2381,10 @@ export default function DashboardLoket() {
                   <div className="bg-teal-50 rounded-xl p-3 text-center">
                     <p className="text-xs text-teal-500">Umum</p>
                     <p className="text-2xl font-bold text-teal-700">{stats.umum}</p>
+                  </div>
+                  <div className="bg-purple-50 rounded-xl p-3 text-center">
+                    <p className="text-xs text-purple-400">Asuransi Lainnya</p>
+                    <p className="text-2xl font-bold text-purple-700">{stats.asuransi_lainnya}</p>
                   </div>
                   <div className="bg-yellow-50 rounded-xl p-3 text-center">
                     <p className="text-xs text-yellow-500">Menunggu</p>
@@ -1619,96 +2416,8 @@ export default function DashboardLoket() {
             </div>
           </div>
         </div>
-        <ModalKelolaRak
-        show={showKelolaRak}
-        onClose={() => {
-          setShowKelolaRak(false)
-          setRakForm({ id: null, kode_rak: '', nama_rak: '' })
-          setRakError('')
-        }}
-        rakList={rakList}
-        rakForm={rakForm}
-        setRakForm={setRakForm}
-        rakLoading={rakLoading}
-        rakError={rakError}
-        onSubmit={simpanRak}
-        onEdit={editRak}
-        onDelete={hapusRak}
-        onPisahkanRmBaru={pisahkanKeRmBaru}
-        onSinkronSemua={sinkronkanSemuaRak}
-        instansiId={profile?.instansi_id}
-        pasienRakBaru={pasienRakBaru}
-        editPasienRakId={editPasienRakId}
-        onBukaTambahPasien={bukaTambahPasienRak}
-        onEditPasienRak={bukaEditPasienRak}
-        onTambahAnggotaGrup={bukaTambahAnggotaGrupRak}
-        onHapusPasienRak={hapusPasienRak}
-        onTutupTambahPasien={tutupTambahPasienRak}
-        formPasienRak={formPasienRak}
-        onChangeFormPasienRak={handleChangeFormPasienRak}
-        onSubmitPasienRak={simpanPasienRak}
-        pasienRakLoading={pasienRakLoading}
-        pasienRakError={pasienRakError}
-        anggotaKkRak={anggotaKkRak}
-        onCekNoKkRak={cekNoKkRak}
-        cekKkRakLoading={cekKkRakLoading}
-        refPasienRakNama={refPasienRakNama}
-        refPasienRakNoRm={refPasienRakNoRm}
-        refPasienRakNik={refPasienRakNik}
-        refPasienRakTanggalLahir={refPasienRakTanggalLahir}
-        refPasienRakJenisKelamin={refPasienRakJenisKelamin}
-        popupValidasi={popupValidasiPasienRak}
-        onTutupPopupValidasi={() => setPopupValidasiPasienRak(null)}
-        onPeriksaPasienRak={periksaPasienDariRak}
-        polis={polis}
-        petugasPoliList={petugasPoliList}
-        onRefreshPetugasPoli={() => profile?.instansi_id && fetchPetugasPoli(profile.instansi_id)}
-        tarifLoket={tarifLoket}
-      />
-      <ModalRetribusi
-        show={showModalRetribusi}
-        onClose={() => setShowModalRetribusi(false)}
-        instansiId={profile?.instansi_id}
-        instansi={profile?.instansi}
-        petugasId={profile?.id}
-      />
 
-      {/* Konfirmasi Logout */}
-      {showKonfirmasiLogout && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
-          onClick={() => setShowKonfirmasiLogout(false)}
-        >
-          <div
-            className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6 text-center"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-3xl">
-              🚪
-            </div>
-            <p className="text-sm font-semibold text-gray-800 mb-1">Keluar dari akun?</p>
-            <p className="text-sm text-gray-500 mb-5">
-              Anda akan keluar dari sesi loket ini dan harus login kembali untuk melanjutkan.
-            </p>
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => setShowKonfirmasiLogout(false)}
-                className="flex-1 rounded-lg border border-gray-300 text-gray-600 text-sm font-medium py-2.5 hover:bg-gray-50 transition"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={signOut}
-                className="flex-1 rounded-lg bg-red-600 text-white text-sm font-medium py-2.5 hover:bg-red-700 transition"
-              >
-                Ya, Keluar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+        {globalLoketModals}
       </div>
     )
   }
@@ -1716,7 +2425,7 @@ export default function DashboardLoket() {
   // ─── TAMPILAN PENCARIAN PASIEN LAMA (FITUR 1) ──────────────
   if (step === 'cari') {
     return (
-      <div className="min-h-screen bg-gray-50 p-6">
+      <div className="min-h-screen bg-gray-50 p-6 pb-44">
         <div className="max-w-2xl mx-auto">
           <div className="flex items-center gap-3 mb-6">
             <button onClick={() => setStep('kategori')} className="text-gray-500 hover:text-gray-700">
@@ -1772,19 +2481,16 @@ export default function DashboardLoket() {
                 />
 
                 <p className="text-sm text-gray-600 mb-4">Pilih kategori kunjungan hari ini:</p>
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => lanjutkanPasienLama('bpjs')}
-                    className="flex-1 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold"
-                  >
-                    BPJS
-                  </button>
-                  <button
-                    onClick={() => lanjutkanPasienLama('umum')}
-                    className="flex-1 py-2 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold"
-                  >
-                    Umum
-                  </button>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  {OPSI_KATEGORI_PASIEN.map((k) => (
+                    <button
+                      key={k.value}
+                      onClick={() => lanjutkanPasienLama(k.value)}
+                      className={`flex-1 py-2 rounded-lg ${k.tombol} text-white text-sm font-semibold`}
+                    >
+                      {k.label}
+                    </button>
+                  ))}
                 </div>
                 <button
                   onClick={() => { setPasienTerpilih(null); setRiwayatPasien([]) }}
@@ -1796,11 +2502,11 @@ export default function DashboardLoket() {
             </div>
           )}
         </div>
+
+        {globalLoketModals}
       </div>
     )
   }
-
-  // ─── TAMPILAN LAYAR ANTRIAN ─────────────────────────────────
   if (step === 'antrian') {
     return (
       <div className="relative">
@@ -1812,21 +2518,24 @@ export default function DashboardLoket() {
   // ─── TAMPILAN CEK ANTRIAN (QR) ──────────────────────────────
   if (step === 'cek-antrian') {
     return (
-      <div className="relative">
+      <div className="relative pb-24">
         <button
           onClick={() => setStep('kategori')}
-          className="fixed top-4 left-4 z-[60] flex items-center gap-2 text-sm font-medium text-white bg-gray-800/80 hover:bg-gray-800 rounded-lg px-4 py-2 shadow-lg backdrop-blur-sm transition"
+          aria-label="Kembali ke loket"
+          className="fixed top-4 left-4 z-[60] flex items-center justify-center w-11 h-11 text-white rounded-full shadow-lg backdrop-blur-sm transition touch-manipulation"
+          style={{ background: '#0E7C66' }}
         >
-          ← Kembali ke Loket
+          <i className="ti ti-home text-xl" aria-hidden="true"></i>
         </button>
         <CekAntrian />
+        {globalLoketModals}
       </div>
     )
   }
 
   // ─── TAMPILAN FORM PENDAFTARAN ─────────────────────────────
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
+    <div className="min-h-screen bg-gray-50 p-6 pb-44">
       <div className="max-w-2xl mx-auto">
 
         <div className="flex items-center gap-3 mb-6">
@@ -1838,14 +2547,8 @@ export default function DashboardLoket() {
           </button>
           <div>
             <h1 className="text-xl font-bold text-gray-800">Pendaftaran Pasien</h1>
-            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-              form.kategori_pasien === 'bpjs'
-                ? 'bg-blue-100 text-blue-700'
-                : form.kategori_pasien === 'umum'
-                ? 'bg-teal-100 text-teal-700'
-                : 'bg-gray-100 text-gray-400'
-            }`}>
-              {form.kategori_pasien ? form.kategori_pasien.toUpperCase() : 'BELUM DIPILIH'}
+            <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${badgeKategoriPasien(form.kategori_pasien)}`}>
+              {form.kategori_pasien ? labelKategoriPasien(form.kategori_pasien).toUpperCase() : 'BELUM DIPILIH'}
             </span>
             {form.pasien_id_existing && (
               <span className="ml-2 text-xs font-semibold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
@@ -1971,6 +2674,38 @@ export default function DashboardLoket() {
               </p>
             )}
           </div>
+
+          {/* Asuransi Lainnya (mis. Jasa Raharja) — nama & nomor kartu/polis */}
+          {form.kategori_pasien === 'asuransi_lainnya' && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div id="field-nama_asuransi">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Nama Asuransi <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  name="nama_asuransi"
+                  value={form.nama_asuransi}
+                  onChange={handleChange}
+                  placeholder="mis. Jasa Raharja"
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <div id="field-no_asuransi">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Nomor Kartu / Polis <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  name="no_asuransi"
+                  value={form.no_asuransi}
+                  onChange={handleChange}
+                  placeholder="Nomor kartu atau polis"
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Nomor BPJS */}
           {form.kategori_pasien === 'bpjs' && (
@@ -2274,14 +3009,19 @@ export default function DashboardLoket() {
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Pekerjaan
               </label>
-              <input
-                type="text"
+              <select
                 name="pekerjaan"
                 value={form.pekerjaan}
                 onChange={handleChange}
-                placeholder="mis. Petani, Wiraswasta, Pelajar"
                 className="w-full border rounded-lg px-3 py-2 text-sm"
-              />
+              >
+                {OPSI_PEKERJAAN.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+                {form.pekerjaan && !OPSI_PEKERJAAN.some((o) => o.value === form.pekerjaan) && (
+                  <option value={form.pekerjaan}>{form.pekerjaan} (data lama)</option>
+                )}
+              </select>
             </div>
           </div>
 
@@ -2322,18 +3062,15 @@ export default function DashboardLoket() {
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Kategori Pasien <span className="text-red-500">*</span>
               </label>
-              <div className="flex gap-3">
-                {[
-                  { value: 'umum', label: '💵 Umum' },
-                  { value: 'bpjs', label: '🏥 BPJS' },
-                ].map((opsi) => (
+              <div className="flex flex-col sm:flex-row gap-3">
+                {OPSI_KATEGORI_PASIEN.map((opsi) => (
                   <button
                     key={opsi.value}
                     type="button"
                     onClick={() => setForm(p => ({
                       ...p,
                       kategori_pasien: opsi.value,
-                      status_bpjs_aktif: opsi.value === 'umum' ? null : p.status_bpjs_aktif,
+                      status_bpjs_aktif: opsi.value === 'bpjs' ? p.status_bpjs_aktif : null,
                     }))}
                     className={`flex-1 py-2 rounded-lg border text-sm font-medium transition ${
                       form.kategori_pasien === opsi.value
@@ -2341,10 +3078,15 @@ export default function DashboardLoket() {
                         : 'bg-white text-gray-600 border-gray-300'
                     }`}
                   >
-                    {opsi.label}
+                    {opsi.labelPanjang}
                   </button>
                 ))}
               </div>
+              {form.kategori_pasien === 'asuransi_lainnya' && (
+                <p className="text-xs mt-1.5 text-purple-700 bg-purple-50 border border-purple-200 rounded-lg px-2.5 py-1.5">
+                  🛡️ Ditanggung penjamin (mis. Jasa Raharja) — tidak dikenakan retribusi loket.
+                </p>
+              )}
               {form.kategori_pasien === 'umum' && tarifLoket.length > 0 && (
                 <p className="text-xs mt-1.5 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
                   💵 Retribusi Loket: Rp{' '}
@@ -2477,52 +3219,8 @@ export default function DashboardLoket() {
 
         </form>
       </div>
-      <ModalKelolaRak
-        show={showKelolaRak}
-        onClose={() => {
-          setShowKelolaRak(false)
-          setRakForm({ id: null, kode_rak: '', nama_rak: '' })
-          setRakError('')
-        }}
-        rakList={rakList}
-        rakForm={rakForm}
-        setRakForm={setRakForm}
-        rakLoading={rakLoading}
-        rakError={rakError}
-        onSubmit={simpanRak}
-        onEdit={editRak}
-        onDelete={hapusRak}
-        onPisahkanRmBaru={pisahkanKeRmBaru}
-        onSinkronSemua={sinkronkanSemuaRak}
-        instansiId={profile?.instansi_id}
-        pasienRakBaru={pasienRakBaru}
-        editPasienRakId={editPasienRakId}
-        onBukaTambahPasien={bukaTambahPasienRak}
-        onEditPasienRak={bukaEditPasienRak}
-        onTambahAnggotaGrup={bukaTambahAnggotaGrupRak}
-        onHapusPasienRak={hapusPasienRak}
-        onTutupTambahPasien={tutupTambahPasienRak}
-        formPasienRak={formPasienRak}
-        onChangeFormPasienRak={handleChangeFormPasienRak}
-        onSubmitPasienRak={simpanPasienRak}
-        pasienRakLoading={pasienRakLoading}
-        pasienRakError={pasienRakError}
-        anggotaKkRak={anggotaKkRak}
-        onCekNoKkRak={cekNoKkRak}
-        cekKkRakLoading={cekKkRakLoading}
-        refPasienRakNama={refPasienRakNama}
-        refPasienRakNoRm={refPasienRakNoRm}
-        refPasienRakNik={refPasienRakNik}
-        refPasienRakTanggalLahir={refPasienRakTanggalLahir}
-        refPasienRakJenisKelamin={refPasienRakJenisKelamin}
-        popupValidasi={popupValidasiPasienRak}
-        onTutupPopupValidasi={() => setPopupValidasiPasienRak(null)}
-        onPeriksaPasienRak={periksaPasienDariRak}
-        polis={polis}
-        petugasPoliList={petugasPoliList}
-        onRefreshPetugasPoli={() => profile?.instansi_id && fetchPetugasPoli(profile.instansi_id)}
-        tarifLoket={tarifLoket}
-      />
+
+      {globalLoketModals}
     </div>
   )
 }

@@ -15,6 +15,28 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- SEMENTARA: penangkap error untuk debugging tampilan putih di HP.
+         Menampilkan pesan error JS langsung di layar, karena di HP tidak
+         ada akses mudah ke console DevTools. HAPUS blok script ini setelah
+         masalah selesai. -->
+    <script>
+      window.addEventListener('error', function (e) {
+        showDebugError('Error: ' + e.message + '\n' + (e.filename || '') + ':' + (e.lineno || ''))
+      })
+      window.addEventListener('unhandledrejection', function (e) {
+        showDebugError('Promise rejection: ' + (e.reason && e.reason.message ? e.reason.message : e.reason))
+      })
+      function showDebugError(text) {
+        var box = document.getElementById('debug-error-box')
+        if (!box) {
+          box = document.createElement('pre')
+          box.id = 'debug-error-box'
+          box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#fee;color:#900;padding:12px;font-size:12px;white-space:pre-wrap;word-break:break-word;max-height:80vh;overflow:auto;border-bottom:3px solid #900;margin:0;'
+          document.body.appendChild(box)
+        }
+        box.textContent += text + '\n\n'
+      }
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

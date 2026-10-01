@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import ProtectedRoute from './components/ProtectedRoute'
 import Login from './pages/Login'
@@ -18,9 +18,10 @@ import KelolaStaf from './pages/admin-instansi/KelolaStaf'
 import KelolaPasien from './pages/admin-instansi/KelolaPasien'
 import KelolaTarifRetribusi from './pages/admin-instansi/KelolaTarifRetribusi'
 import ProfilInstansi from './pages/admin-instansi/ProfilInstansi'
-import DashboardLoket from './pages/nakes/loket/DashboardLoket'
+import DashboardSistemInformasi from './pages/ruangan/klaster-1-manajemen/sistem-informasi/dashboard-sistem-informasi'
 import DashboardPerawat from './pages/nakes/poli-umum/perawat/DashboardPerawat'
 import DashboardDokter from './pages/nakes/poli-umum/dokter/DashboardDokter'
+import DashboardKIA from './pages/ruangan/klaster-2-ibu-dan-anak/KIA/DashboardKIA'
 import DashboardApoteker from './pages/nakes/apotek/DashboardApoteker'
 import DashboardLab from './pages/nakes/lab/DashboardLab'
 import DashboardEpid from './pages/nakes/epid/DashboardEpid'
@@ -31,6 +32,7 @@ import KelolaRakIGD from './pages/nakes/igd/KelolaRakIGD'
 import ProfilPuskesmas from './pages/nakes/skm/ProfilPuskesmas'
 import SettingPuskesmas from './pages/nakes/skm/SettingPuskesmas'
 import StatusAntrian from './pages/nakes/loket/StatusAntrian'
+import HalamanConsentPublik from './pages/consent/HalamanConsentPublik'
 
 export default function App() {
   return (
@@ -72,12 +74,12 @@ export default function App() {
             <Route path="profil" element={<ProfilInstansi />} />
           </Route>
 
-          {/* Loket */}
+          {/* Sistem Informasi — membaca dari folder sistem-informasi */}
           <Route
-            path="/dashboard/nakes/loket"
+            path="/dashboard/ruangan/klaster-1-manajemen/sistem-informasi"
             element={
               <ProtectedRoute allowedRoles={['nakes']}>
-                <DashboardLoket />
+                <DashboardSistemInformasi />
               </ProtectedRoute>
             }
           />
@@ -100,6 +102,22 @@ export default function App() {
                 <DashboardDokter />
               </ProtectedRoute>
             }
+          />
+
+          {/* KIA (Poli KIA / Bidan) — URL mengikuti struktur folder */}
+          <Route
+            path="/dashboard/ruangan/klaster-2-ibu-dan-anak/kia"
+            element={
+              <ProtectedRoute allowedRoles={['nakes']}>
+                <DashboardKIA />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* URL lama KIA — diarahkan ke URL baru agar link lama tidak rusak */}
+          <Route
+            path="/dashboard/nakes/bidan"
+            element={<Navigate to="/dashboard/ruangan/klaster-2-ibu-dan-anak/kia" replace />}
           />
 
           {/* Perawat IGD */}
@@ -177,6 +195,13 @@ export default function App() {
           <Route
             path="/status-antrian/:id"
             element={<StatusAntrian />}
+          />
+
+          {/* ── General Consent: halaman publik pasien scan QR & TTD ── */}
+          {/* Tidak butuh login. Diakses via token unik, dicek via RLS Supabase. */}
+          <Route
+            path="/consent/:token"
+            element={<HalamanConsentPublik />}
           />
 
           {/* ── SKM: Profil Publik Puskesmas (generik, semua instansi) ── */}

@@ -20,6 +20,7 @@ export default function CekAntrian() {
   const [gantiPoliTarget, setGantiPoliTarget] = useState(null) // baris kunjungan yg mau diganti poli
   const [selectedPoliId, setSelectedPoliId] = useState('')
   const [gantiPoliLoading, setGantiPoliLoading] = useState(false)
+  const [searchTerm, setSearchTerm] = useState('')
 
   useEffect(() => {
     let channel
@@ -94,7 +95,7 @@ export default function CekAntrian() {
           kategori_pasien,
           tanggal_periksa,
           poli_id,
-          pasien:pasien_id ( no_rekam_medis, nama_lengkap ),
+          pasien:pasien_id ( no_rekam_medis, nama_lengkap, no_bpjs ),
           polis:poli_id ( nama_poli )
         `
         )
@@ -208,11 +209,25 @@ export default function CekAntrian() {
     return map[status] || status || '-'
   }
 
+  // Filter kunjungan berdasarkan nama pasien, No. RM, atau No. BPJS —
+  // dicocokkan case-insensitive terhadap searchTerm. Kalau searchTerm
+  // kosong, tampilkan semua kunjungan hari ini seperti biasa.
+  const keyword = searchTerm.trim().toLowerCase()
+  const filteredKunjungan = keyword
+    ? kunjungan.filter((row) => {
+        const nama = (row.pasien?.nama_lengkap || '').toLowerCase()
+        const noRm = (row.pasien?.no_rekam_medis || '').toLowerCase()
+        const noBpjs = (row.pasien?.no_bpjs || '').toLowerCase()
+        return nama.includes(keyword) || noRm.includes(keyword) || noBpjs.includes(keyword)
+      })
+    : kunjungan
+
   return (
     <div
-      className="min-h-screen p-8"
+      className="min-h-screen p-3 sm:p-6 pb-24"
       style={{ background: 'var(--bg)', color: 'var(--ink)' }}
     >
+      <div className="max-w-7xl mx-auto">
       <div className="mb-8 text-center mt-4">
         <p className="text-sm font-extrabold tracking-tight leading-none">
           <span style={{ color: 'var(--accent)' }}>Epiflow</span>
@@ -226,8 +241,28 @@ export default function CekAntrian() {
         </p>
       </div>
 
+      <div className="relative mb-4 max-w-md mx-auto">
+        <svg
+          width="16" height="16" viewBox="0 0 24 24" fill="none"
+          className="absolute left-3 top-1/2 -translate-y-1/2"
+          style={{ color: 'var(--muted)' }}
+          aria-hidden="true"
+        >
+          <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M21 21l-4.35-4.35" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Cari nama, No. RM, atau No. BPJS"
+          className="w-full pl-9 pr-3 py-2.5 rounded-lg outline-none text-sm"
+          style={{ border: '1px solid var(--line)', background: '#fff', color: 'var(--ink)' }}
+        />
+      </div>
+
       <div
-        className="w-full max-w-5xl mx-auto rounded-2xl overflow-hidden"
+        className="w-full rounded-2xl overflow-hidden"
         style={{
           background: 'var(--surface)',
           border: '1px solid var(--line)',
@@ -246,8 +281,82 @@ export default function CekAntrian() {
           <div className="p-8 text-center text-sm" style={{ color: 'var(--muted)' }}>
             Belum ada kunjungan hari ini.
           </div>
+        ) : filteredKunjungan.length === 0 ? (
+          <div className="p-8 text-center text-sm" style={{ color: 'var(--muted)' }}>
+            Tidak ada kunjungan yang cocok dengan pencarian.
+          </div>
         ) : (
-          <div className="overflow-x-auto">
+          <>
+            {/* ── Tampilan kartu — layar kecil (HP) ── */}
+            <div className="sm:hidden p-3 space-y-3">
+              {filteredKunjungan.map((row) => (
+                <div
+                  key={row.id}
+                  className="rounded-2xl p-3.5"
+                  style={{ border: '1px solid var(--line)', background: '#fff' }}
+                >
+                  <div className="flex justify-between items-start mb-2 gap-2">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sm truncate">{row.pasien?.nama_lengkap || '-'}</p>
+                      <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+                        No. RM {row.pasien?.no_rekam_medis || '-'}
+                      </p>
+                    </div>
+                    <span
+                      className="text-xs font-semibold px-2 py-1 rounded-full whitespace-nowrap"
+                      style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}
+                    >
+                      {statusLabel(row.status_panggil || row.status)}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5 mb-3">
+                    <span className="text-xs px-2 py-1 rounded" style={{ background: 'var(--bg)', color: 'var(--muted)' }}>
+                      {row.polis?.nama_poli || '-'}
+                    </span>
+                    <span className="text-xs px-2 py-1 rounded" style={{ background: 'var(--bg)', color: 'var(--muted)' }}>
+                      {row.kategori_pasien || '-'}
+                    </span>
+                    <span className="text-xs font-semibold px-2 py-1 rounded" style={{ background: 'var(--bg)', color: 'var(--accent)' }}>
+                      No. antrian {row.nomor_antrian ?? '-'}
+                    </span>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setQrTarget(row)}
+                      className="flex-1 py-2.5 rounded-lg text-white text-xs font-semibold touch-manipulation"
+                      style={{ background: 'var(--accent)' }}
+                    >
+                      QR
+                    </button>
+                    <button
+                      onClick={() => {
+                        setSelectedPoliId(row.poli_id || '')
+                        setGantiPoliTarget(row)
+                      }}
+                      className="flex-1 py-2.5 rounded-lg text-xs font-semibold touch-manipulation"
+                      style={{ background: '#fef3c7', color: '#854d0e' }}
+                    >
+                      Ganti poli
+                    </button>
+                    <button
+                      onClick={() => setBatalTarget(row)}
+                      className="flex-1 py-2.5 rounded-lg text-xs font-semibold touch-manipulation"
+                      style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}
+                    >
+                      Batal
+                    </button>
+                  </div>
+                </div>
+              ))}
+              <p className="text-xs text-center pt-1" style={{ color: 'var(--muted)' }}>
+                Menampilkan {filteredKunjungan.length} dari {kunjungan.length} kunjungan
+              </p>
+            </div>
+
+            {/* ── Tampilan tabel — layar besar (desktop/tablet) ── */}
+            <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--line)' }}>
@@ -261,7 +370,7 @@ export default function CekAntrian() {
                 </tr>
               </thead>
               <tbody>
-                {kunjungan.map((row) => (
+                {filteredKunjungan.map((row) => (
                   <tr key={row.id} style={{ borderBottom: '1px solid var(--line)' }}>
                     <td className="px-4 py-3">{row.pasien?.no_rekam_medis || '-'}</td>
                     <td className="px-4 py-3">{row.pasien?.nama_lengkap || '-'}</td>
@@ -301,8 +410,10 @@ export default function CekAntrian() {
                 ))}
               </tbody>
             </table>
-          </div>
+            </div>
+          </>
         )}
+      </div>
       </div>
 
       {qrTarget && (

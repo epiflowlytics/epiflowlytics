@@ -64,6 +64,17 @@ export function validasiNik(nik) {
   return { status: 'valid', pesan: 'NIK valid' }
 }
 
+// Deteksi apakah NIK yang diinput memakai format placeholder (bukan NIK asli):
+// - 'belum_terbit' : angka 9 diulang 16 kali (usia 0-17 tahun, NIK belum terbit)
+// - 'lupa'         : angka 9 diulang 15 kali lalu diakhiri angka 6 (usia 18+, NIK lupa/tidak diketahui)
+// Dipakai untuk memunculkan & mewajibkan field NIK Pendamping di form.
+export function cekNikPlaceholder(nik) {
+  if (!nik) return null
+  if (/^9{16}$/.test(nik)) return 'belum_terbit'
+  if (/^9{15}6$/.test(nik)) return 'lupa'
+  return null
+}
+
 // Generate nomor rekam medis otomatis
 export function generateNoRM() {
   const now = new Date()
@@ -92,10 +103,65 @@ export const EPUSKESMAS_URL = 'https://gowa.epuskesmas.id/'
 // - kategori 'bpjs' & status_bpjs_aktif === true  -> tidak kena (ditanggung BPJS)
 // - kategori 'bpjs' & status_bpjs_aktif belum dicek (null) -> anggap belum bisa
 //   ditentukan, form akan minta petugas mengecek dulu sebelum submit.
+// - kategori 'asuransi_lainnya' (mis. Jasa Raharja) -> tidak kena retribusi
+//   loket, karena biaya ditanggung penjamin (sama seperti BPJS aktif).
 export function perluRetribusi(form) {
   if (form.kategori_pasien === 'umum') return true
   if (form.kategori_pasien === 'bpjs') return form.status_bpjs_aktif === false
+  if (form.kategori_pasien === 'asuransi_lainnya') return false
   return false
+}
+
+// Kategori pasien (cara pembayaran). Satu sumber kebenaran supaya badge,
+// tombol pilihan, dan label statistik tidak hardcode sendiri-sendiri.
+// Sesuai pedoman: JKN, Mandiri (umum), Asuransi lainnya.
+export const OPSI_KATEGORI_PASIEN = [
+  { value: 'bpjs', label: 'BPJS', labelPanjang: '🏥 BPJS / JKN', badge: 'bg-blue-100 text-blue-700', tombol: 'bg-blue-600 hover:bg-blue-700' },
+  { value: 'umum', label: 'Umum', labelPanjang: '💵 Umum / Mandiri', badge: 'bg-teal-100 text-teal-700', tombol: 'bg-teal-600 hover:bg-teal-700' },
+  { value: 'asuransi_lainnya', label: 'Asuransi Lainnya', labelPanjang: '🛡️ Asuransi Lainnya', badge: 'bg-purple-100 text-purple-700', tombol: 'bg-purple-600 hover:bg-purple-700' },
+]
+
+export function labelKategoriPasien(value) {
+  return OPSI_KATEGORI_PASIEN.find((o) => o.value === value)?.label || (value ? value.toUpperCase() : '')
+}
+
+export function badgeKategoriPasien(value) {
+  return OPSI_KATEGORI_PASIEN.find((o) => o.value === value)?.badge || 'bg-gray-100 text-gray-400'
+}
+
+// Kategori Pekerjaan (KBJI). Value disimpan ke kolom pasien.pekerjaan
+// (teks) memakai label-nya, supaya data lama teks bebas tetap terbaca
+// dan laporan/Kartu RM tidak menampilkan kode internal.
+export const OPSI_PEKERJAAN = [
+  { value: '', label: 'Pilih Pekerjaan' },
+  { value: 'Tidak/Belum Bekerja', label: 'Tidak/Belum Bekerja' },
+  { value: 'Pelajar/Mahasiswa', label: 'Pelajar/Mahasiswa' },
+  { value: 'Mengurus Rumah Tangga', label: 'Mengurus Rumah Tangga' },
+  { value: 'Pensiunan', label: 'Pensiunan' },
+  { value: 'PNS/ASN', label: 'PNS/ASN' },
+  { value: 'TNI/Polri', label: 'TNI/Polri' },
+  { value: 'Karyawan Swasta', label: 'Karyawan Swasta' },
+  { value: 'Karyawan BUMN/BUMD', label: 'Karyawan BUMN/BUMD' },
+  { value: 'Wiraswasta', label: 'Wiraswasta' },
+  { value: 'Petani/Pekebun', label: 'Petani/Pekebun' },
+  { value: 'Nelayan/Perikanan', label: 'Nelayan/Perikanan' },
+  { value: 'Buruh', label: 'Buruh' },
+  { value: 'Guru/Dosen', label: 'Guru/Dosen' },
+  { value: 'Tenaga Kesehatan', label: 'Tenaga Kesehatan' },
+  { value: 'Pedagang', label: 'Pedagang' },
+  { value: 'Sopir/Transportasi', label: 'Sopir/Transportasi' },
+  { value: 'Lainnya', label: 'Lainnya' },
+]
+
+// Data lama disimpan sebagai teks bebas (mis. "PETANI", "Asn"). Cocokkan tanpa
+// peduli huruf besar/kecil supaya nilai lama tetap terpilih di dropdown. Kalau
+// tidak ada yang cocok, kembalikan teks aslinya agar tidak hilang diam-diam
+// (form menampilkannya sebagai opsi tambahan).
+export function normalisasiPekerjaan(nilai) {
+  if (!nilai) return ''
+  const t = String(nilai).trim().toLowerCase()
+  const cocok = OPSI_PEKERJAAN.find((o) => o.value && o.value.toLowerCase() === t)
+  return cocok ? cocok.value : String(nilai).trim()
 }
 
 export const FORM_AWAL = {
@@ -112,6 +178,8 @@ export const FORM_AWAL = {
   alamat: '',
   no_nik: '',
   no_bpjs: '',
+  no_asuransi: '', // Nomor kartu/polis, wajib jika kategori_pasien='asuransi_lainnya'
+  nama_asuransi: '', // Nama asuransi (mis. Jasa Raharja), wajib jika kategori_pasien='asuransi_lainnya'
   no_kk: '', // Nomor Kartu Keluarga — dipakai untuk menyatukan No. RM satu keluarga
   nama_kepala_keluarga: '', // Nama kepala keluarga (KK) — untuk dicetak di Kartu Rekam Medis
   urutan_kk: '', // Urutan anggota keluarga (1,2,3,...) — beda dari no_kk
@@ -133,6 +201,13 @@ export const FORM_PASIEN_RAK_AWAL = {
   status_keluarga: '',
   status_keluarga_lainnya: '',
   no_nik: '',
+  no_nik_pendamping: '', // NIK ayah/ibu/wali yang cakap — diisi jika pasien belum punya NIK sendiri
+  nama_ibu_kandung: '', // identifier tambahan pasien — bisa diisi manual atau otomatis dari anggota KK berstatus Ibu
+  kewarganegaraan: 'WNI',
+  no_telepon: '',
+  no_telepon_pengantar: '', // Hanya diisi saat is_bayi_baru_lahir = true
+  golongan_darah: '',
+  foto_url: '', // URL foto pasien di Supabase Storage (opsional)
   no_bpjs: '',
   alamat: '',
   nama_lengkap: '',
@@ -141,7 +216,54 @@ export const FORM_PASIEN_RAK_AWAL = {
   tanggal_lahir: '',
   jenis_kelamin: '',
   pekerjaan: '',
+  agama: '',
+  pendidikan: '',
+  status_perkawinan: '',
 }
+
+export const OPSI_KEWARGANEGARAAN = [
+  { value: 'WNI', label: 'WNI' },
+  { value: 'WNA', label: 'WNA' },
+]
+
+export const OPSI_GOLONGAN_DARAH = [
+  { value: '', label: 'Tidak Tahu / Belum Diperiksa' },
+  { value: 'A', label: 'A' },
+  { value: 'B', label: 'B' },
+  { value: 'AB', label: 'AB' },
+  { value: 'O', label: 'O' },
+]
+
+export const OPSI_AGAMA = [
+  { value: '', label: 'Pilih Agama' },
+  { value: 'islam', label: 'Islam' },
+  { value: 'kristen', label: 'Kristen/Protestan' },
+  { value: 'katolik', label: 'Katolik' },
+  { value: 'hindu', label: 'Hindu' },
+  { value: 'buddha', label: 'Buddha' },
+  { value: 'konghucu', label: 'Konghucu' },
+  { value: 'lainnya', label: 'Lainnya' },
+]
+
+export const OPSI_PENDIDIKAN = [
+  { value: '', label: 'Pilih Pendidikan' },
+  { value: 'tidak_sekolah', label: 'Tidak/Belum Sekolah' },
+  { value: 'sd', label: 'SD/Sederajat' },
+  { value: 'smp', label: 'SMP/Sederajat' },
+  { value: 'sma', label: 'SMA/Sederajat' },
+  { value: 'diploma', label: 'Diploma (D1-D3)' },
+  { value: 's1', label: 'S1/Sederajat' },
+  { value: 's2', label: 'S2' },
+  { value: 's3', label: 'S3' },
+]
+
+export const OPSI_STATUS_PERKAWINAN = [
+  { value: '', label: 'Pilih Status Perkawinan' },
+  { value: 'belum_kawin', label: 'Belum Kawin' },
+  { value: 'kawin', label: 'Kawin' },
+  { value: 'cerai_hidup', label: 'Cerai Hidup' },
+  { value: 'cerai_mati', label: 'Cerai Mati' },
+]
 
 export const OPSI_STATUS_KELUARGA = [
   { value: '', label: 'Pilih Status' },

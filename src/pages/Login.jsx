@@ -17,13 +17,18 @@ const ROLE_REDIRECT = {
 
 // Redirect berdasarkan profesi untuk role nakes
 const PROFESI_REDIRECT = {
-  ADMINKES: '/dashboard/nakes/loket',
+  ADMINKES: '/dashboard/ruangan/klaster-1-manajemen/sistem-informasi',
   PERAWAT: '/dashboard/nakes/perawat',
   DOKTER: '/dashboard/nakes/dokter',
   APOTEKER: '/dashboard/nakes/apotek',
   LABORAN: '/dashboard/nakes/lab',
   EPID: '/dashboard/nakes/epid',
   EPIDEMIOLOGI: '/dashboard/nakes/epid', // alias: sebagian akun mengisi profesi lengkap "epidemiologi", bukan singkatan "epid"
+
+  // BIDAN (mis. Poli KIA) dan ANALIS ada di tabel profesi_nakes tapi sebelumnya tidak punya redirect,
+  // sehingga login menampilkan "Profesi akun Anda belum dikenali".
+  BIDAN: '/dashboard/nakes/bidan',
+  ANALIS: '/dashboard/nakes/lab',
 
   // SKM (Survei Kepuasan Masyarakat / Sarjana Kesehatan Masyarakat) — kelola profil publik puskesmas
   SKM: '/puskesmas/batumalonro/settings',
@@ -263,7 +268,7 @@ export default function Login() {
     // nakes ini ditugaskan ke poli "IGD", karena alur & dashboard IGD berbeda
     // dari poli umum walau profesi (perawat/dokter) sama persis.
     if (profileRow.role === 'nakes') {
-      const profesiUpper = profileRow.profesi?.toUpperCase()
+      const profesiUpper = profileRow.profesi?.trim().toUpperCase()
       const namaPoli = profileRow.polis?.nama_poli
 
       if (namaPoli === 'IGD') {

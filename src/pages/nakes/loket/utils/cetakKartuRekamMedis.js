@@ -26,6 +26,9 @@ export function buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat, berkasLis
   const ttl = [tempatLahir, tanggalLahir].filter(Boolean).join(', ') || '-'
   const jenisKelamin = dataPasien?.jenis_kelamin === 'L' ? 'Tn' : dataPasien?.jenis_kelamin === 'P' ? 'Ny' : ''
   const pekerjaan = dataPasien?.pekerjaan || '-'
+  const agama = (dataPasien?.agama || '-').toUpperCase()
+  const pendidikan = (dataPasien?.pendidikan || '-').toUpperCase()
+  const statusPerkawinan = (dataPasien?.status_perkawinan || '-').toUpperCase().replace(/_/g, ' ')
   const namaKk = dataPasien?.nama_kepala_keluarga || dataPasien?.nama_kk || '-'
   const alamatPasien = dataPasien?.alamat || '-'
   const noKtpBpjs = [dataPasien?.no_nik, dataPasien?.no_bpjs].filter(Boolean).join(' / ') || '-'
@@ -35,16 +38,25 @@ export function buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat, berkasLis
   const htmlBerkas = daftarBerkas.length > 0
     ? daftarBerkas.map((b) => {
         if (b.tipe_file === 'foto') {
+          // loading="lazy" -> foto baru diminta browser saat halamannya mau
+          // discroll ke situ, bukan semua dimuat sekaligus saat kartu dibuka.
+          // Saat print, browser otomatis memuat semua sebelum mencetak, jadi
+          // hasil cetak tidak terpengaruh — ini murni mempercepat tampilan layar.
           return `
             <div class="halaman-berkas">
               <p class="judul-berkas">Berkas RM Fisik — ${b.nama_file}</p>
-              <img src="${b.url}" alt="${b.nama_file}" class="foto-berkas" />
+              <img src="${b.url}" alt="${b.nama_file}" class="foto-berkas" loading="lazy" />
             </div>`
         }
+        // PDF TIDAK di-embed penuh lewat iframe (berat, tiap iframe buka
+        // instance PDF viewer sendiri). Cukup tautan "Buka PDF" yang
+        // membuka file aslinya di tab baru saat memang dibutuhkan.
         return `
-          <div class="halaman-berkas">
+          <div class="halaman-berkas halaman-pdf">
             <p class="judul-berkas">Berkas RM Fisik — ${b.nama_file}</p>
-            <iframe src="${b.url}" class="pdf-berkas"></iframe>
+            <a href="${b.url}" target="_blank" rel="noopener noreferrer" class="link-pdf">
+              📄 Buka PDF: ${b.nama_file}
+            </a>
           </div>`
       }).join('')
     : ''
@@ -93,12 +105,54 @@ export function buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat, berkasLis
           .identitas td.label { width: 150px; white-space: nowrap; }
           .identitas td.titik { width: 12px; }
           .identitas td.isi { border-bottom: 1px dotted #555; }
-          .halaman-berkas { page-break-before: always; padding-top: 10px; }
-          .halaman-berkas .judul-berkas { font-size: 12px; font-weight: bold; margin-bottom: 8px; text-align: center; }
-          .halaman-berkas .foto-berkas { display: block; width: 100%; max-width: 100%; height: auto; }
-          .halaman-berkas .pdf-berkas { display: block; width: 100%; height: 950px; border: 1px solid #999; }
+          /*
+            F4 = 215mm x 330mm, margin @page 12mm di semua sisi ->
+            area cetak tersedia = 306mm tinggi, 191mm lebar.
+            Judul foto (font 12px + margin) makan sedikit ruang di atas.
+            Sisanya dipakai sebagai tinggi MAKSIMUM foto, supaya
+            1 foto = 1 halaman, TIDAK LEBIH, berapa pun rasio/orientasi
+            foto aslinya (potret HP yang tinggi sekalipun). object-fit:
+            contain -> foto diperkecil proporsional agar pas, tidak
+            dipotong dan tidak gepeng/distorsi.
+          */
+          .halaman-berkas {
+            page-break-before: always;
+            page-break-after: always;
+            page-break-inside: avoid;
+            padding-top: 10px;
+            height: 306mm;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+          }
+          .halaman-berkas .judul-berkas {
+            font-size: 12px; font-weight: bold; margin-bottom: 8px; text-align: center;
+            flex-shrink: 0;
+          }
+          .halaman-berkas .foto-berkas {
+            display: block;
+            width: 100%;
+            max-width: 100%;
+            flex: 1 1 auto;
+            min-height: 0;
+            object-fit: contain;
+            object-position: top center;
+          }
+          .halaman-pdf { text-align: center; padding-top: 40px; }
+          .halaman-pdf .link-pdf {
+            display: inline-block; font-size: 13px; color: #0d9488; text-decoration: none;
+            border: 1px solid #0d9488; border-radius: 8px; padding: 10px 20px; font-weight: 600;
+          }
+          .halaman-pdf .link-pdf:hover { background: #f0fdfa; }
           @media print {
-            .halaman-berkas { page-break-before: always; }
+            .halaman-pdf .link-pdf { border: 1px solid #000; color: #000; }
+          }
+          @media print {
+            .halaman-berkas {
+              page-break-before: always;
+              page-break-after: always;
+              page-break-inside: avoid;
+            }
           }
           table.riwayat { width: 100%; border-collapse: collapse; font-size: 11px; }
           table.riwayat th, table.riwayat td { border: 1px solid #000; padding: 4px 6px; vertical-align: top; }
@@ -149,6 +203,18 @@ export function buatHtmlKartuRekamMedis(dataPasien, instansi, riwayat, berkasLis
             <tr>
               <td class="label">Pekerjaan</td><td class="titik">:</td>
               <td class="isi">${pekerjaan}</td>
+            </tr>
+            <tr>
+              <td class="label">Agama</td><td class="titik">:</td>
+              <td class="isi">${agama}</td>
+            </tr>
+            <tr>
+              <td class="label">Pendidikan Terakhir</td><td class="titik">:</td>
+              <td class="isi">${pendidikan}</td>
+            </tr>
+            <tr>
+              <td class="label">Status Perkawinan</td><td class="titik">:</td>
+              <td class="isi">${statusPerkawinan}</td>
             </tr>
             <tr>
               <td class="label">Nama Kepala Keluarga</td><td class="titik">:</td>

@@ -24,6 +24,12 @@ export default function DashboardPerawat() {
     catatan: '',
   })
 
+  // Riwayat kesehatan pasien (alergi obat & riwayat penyakit) — disimpan di tabel pasien,
+  // bisa dilihat & diedit oleh perawat, dokter, maupun apoteker.
+  const [editRiwayatKesehatan, setEditRiwayatKesehatan] = useState(false)
+  const [riwayatKesehatanForm, setRiwayatKesehatanForm] = useState({ alergi_obat: '', riwayat_penyakit: '' })
+  const [loadingRiwayatKesehatan, setLoadingRiwayatKesehatan] = useState(false)
+
   useEffect(() => {
     fetchProfile()
   }, [])
@@ -86,7 +92,9 @@ export default function DashboardPerawat() {
           status_keluarga,
           status_keluarga_lainnya,
           pekerjaan,
-          alamat
+          alamat,
+          alergi_obat,
+          riwayat_penyakit
         )
       `)
       .eq('poli_id', poliId)
@@ -222,8 +230,57 @@ export default function DashboardPerawat() {
     setRiwayatPemeriksaan([])
     setTampilkanSemuaRiwayat(false)
 
+    // Riwayat kesehatan (alergi obat & riwayat penyakit) sudah ikut terbawa dari data antrian
+    setEditRiwayatKesehatan(false)
+    setRiwayatKesehatanForm({
+      alergi_obat: kunjungan.pasien?.alergi_obat || '',
+      riwayat_penyakit: kunjungan.pasien?.riwayat_penyakit || '',
+    })
+
     // Ambil riwayat pemeriksaan pasien ini dari kunjungan-kunjungan sebelumnya
     fetchRiwayatPemeriksaan(kunjungan.pasien_id, kunjungan.id)
+  }
+
+  function handleRiwayatKesehatanChange(e) {
+    const { name, value } = e.target
+    setRiwayatKesehatanForm((prev) => ({ ...prev, [name]: value }))
+  }
+
+  async function simpanRiwayatKesehatan() {
+    if (!selected?.pasien_id) return
+    setLoadingRiwayatKesehatan(true)
+    setError('')
+    try {
+      const { error: err } = await supabase
+        .from('pasien')
+        .update({
+          alergi_obat: riwayatKesehatanForm.alergi_obat.trim() || null,
+          riwayat_penyakit: riwayatKesehatanForm.riwayat_penyakit.trim() || null,
+        })
+        .eq('id', selected.pasien_id)
+
+      if (err) throw new Error(err.message)
+
+      // Update juga data lokal supaya tampilan langsung sinkron tanpa fetch ulang antrian
+      setSelected((prev) => prev && ({
+        ...prev,
+        pasien: {
+          ...prev.pasien,
+          alergi_obat: riwayatKesehatanForm.alergi_obat.trim() || null,
+          riwayat_penyakit: riwayatKesehatanForm.riwayat_penyakit.trim() || null,
+        },
+      }))
+      setAntrian((prev) => prev.map((k) => (
+        k.id === selected.id
+          ? { ...k, pasien: { ...k.pasien, alergi_obat: riwayatKesehatanForm.alergi_obat.trim() || null, riwayat_penyakit: riwayatKesehatanForm.riwayat_penyakit.trim() || null } }
+          : k
+      )))
+      setEditRiwayatKesehatan(false)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoadingRiwayatKesehatan(false)
+    }
   }
 
   // Ambil riwayat pemeriksaan pasien dari kunjungan-kunjungan sebelumnya (poli apa saja),
@@ -460,6 +517,85 @@ export default function DashboardPerawat() {
                   )}
                   {selected.kategori_pasien === 'bpjs' && (
                     <p className="text-xs text-blue-600 mt-1">BPJS: {selected.pasien.no_bpjs}</p>
+                  )}
+                </div>
+
+                {/* Alergi Obat & Riwayat Penyakit */}
+                <div className="border border-red-200 bg-red-50/50 rounded-xl p-4 mb-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-sm font-bold text-red-700">⚠️ Alergi Obat & Riwayat Penyakit</p>
+                    {!editRiwayatKesehatan && (
+                      <button
+                        type="button"
+                        onClick={() => setEditRiwayatKesehatan(true)}
+                        className="text-xs text-red-600 font-medium hover:underline"
+                      >
+                        ✏️ Edit
+                      </button>
+                    )}
+                  </div>
+
+                  {editRiwayatKesehatan ? (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Alergi Obat</label>
+                        <textarea
+                          name="alergi_obat"
+                          value={riwayatKesehatanForm.alergi_obat}
+                          onChange={handleRiwayatKesehatanChange}
+                          rows={2}
+                          placeholder="Tuliskan alergi obat pasien (mis. Amoxicillin, Paracetamol)..."
+                          className="w-full border rounded-lg px-3 py-2 text-sm resize-none bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">Riwayat Penyakit</label>
+                        <textarea
+                          name="riwayat_penyakit"
+                          value={riwayatKesehatanForm.riwayat_penyakit}
+                          onChange={handleRiwayatKesehatanChange}
+                          rows={2}
+                          placeholder="Tuliskan riwayat penyakit pasien (mis. Hipertensi, Diabetes)..."
+                          className="w-full border rounded-lg px-3 py-2 text-sm resize-none bg-white"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditRiwayatKesehatan(false)
+                            setRiwayatKesehatanForm({
+                              alergi_obat: selected.pasien?.alergi_obat || '',
+                              riwayat_penyakit: selected.pasien?.riwayat_penyakit || '',
+                            })
+                          }}
+                          className="flex-1 py-1.5 rounded-lg border border-gray-300 text-gray-600 text-xs hover:bg-gray-50"
+                        >
+                          Batal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={simpanRiwayatKesehatan}
+                          disabled={loadingRiwayatKesehatan}
+                          className="flex-1 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold disabled:opacity-50"
+                        >
+                          {loadingRiwayatKesehatan ? 'Menyimpan...' : 'Simpan'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-sm text-gray-800">
+                        <span className="font-medium">Alergi Obat:</span>{' '}
+                        {selected.pasien?.alergi_obat
+                          ? <span className="text-red-700 font-semibold">{selected.pasien.alergi_obat}</span>
+                          : <span className="text-gray-400">Tidak ada data</span>}
+                      </p>
+                      <p className="text-sm text-gray-800">
+                        <span className="font-medium">Riwayat Penyakit:</span>{' '}
+                        {selected.pasien?.riwayat_penyakit || <span className="text-gray-400">Tidak ada data</span>}
+                      </p>
+                    </div>
                   )}
                 </div>
 
