@@ -44,7 +44,7 @@ export function ikonPin(L, warna, lebar = 30) {
 export const tinggiPin = (lebar = 30) => Math.round(lebar * RASIO)
 
 // Pin untuk SVG React (peta d3). Ujung pin berada di (0,0).
-export function PinSvg({ warna, skala = 0.7 }) {
+export function PinSvg({ warna, skala = 0.4 }) {
   return (
     <g transform={`scale(${skala}) translate(-20,-46)`}>
       <ellipse cx="20" cy="46" rx="16" ry="3.6" fill="none" stroke={warna} strokeWidth="1.4" />
