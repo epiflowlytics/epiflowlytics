@@ -1,9 +1,9 @@
-﻿const fs = require('fs')
+const fs = require('fs')
 const path = require('path')
 
 const SUMBER = 'D:/appweb/epiflowlytics/FILE SHP/SULAWESI/geojson/sulawesi-roads-simplified.geojson'
 const KELUARAN = path.join('public', 'data', 'sulawesi', 'jalan')
-const UKURAN = 2      // lebar satu kotak dalam derajat
+const UKURAN = 0.5      // lebar satu kotak dalam derajat
 const MIN_LON = 117
 const MIN_LAT = -8
 
@@ -37,11 +37,12 @@ fs.rmSync(KELUARAN, { recursive: true, force: true })
 fs.mkdirSync(KELUARAN, { recursive: true })
 let total = 0
 for (const [k, fitur] of kotak) {
-  const isi = JSON.stringify({ type: 'FeatureCollection', features: fitur })
+  // Bulatkan koordinat ke 5 desimal (sekitar 1 meter) supaya file lebih kecil
+  const isi = JSON.stringify({ type: 'FeatureCollection', features: fitur }, (key, val) =>
+    typeof val === 'number' && !Number.isInteger(val) ? Math.round(val * 1e5) / 1e5 : val
+  )
   fs.writeFileSync(path.join(KELUARAN, `${k}.geojson`), isi)
   total += isi.length
 }
 console.log(`${kotak.size} file dibuat di ${KELUARAN}`)
 console.log(`Total ukuran: ${(total / 1024 / 1024).toFixed(1)} MB`)
-
-

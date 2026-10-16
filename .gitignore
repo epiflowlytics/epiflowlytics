@@ -1,4 +1,4 @@
-﻿node_modules
+node_modules
 dist
 .env
 .env.local
@@ -13,4 +13,5 @@ FILE SHP/
 docs/
 logo*.png
 ARAH MATA ANGIN.svg
-public/data/
+public/data/sulawesi/sulawesi-jalan.geojson
+*.bak

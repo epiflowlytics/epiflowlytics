@@ -1,9 +1,9 @@
-﻿const fs = require('fs')
+const fs = require('fs')
 const path = require('path')
 
 const SUMBER = 'D:/appweb/epiflowlytics/FILE SHP/SULAWESI/geojson/sulawesi-waterways.geojson'
 const KELUARAN = path.join('public', 'data', 'sulawesi', 'sungai')
-const UKURAN = 2      // lebar satu kotak dalam derajat
+const UKURAN = 0.5      // lebar satu kotak dalam derajat
 const MIN_LON = 117
 const MIN_LAT = -8
 

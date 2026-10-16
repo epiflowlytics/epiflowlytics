@@ -395,7 +395,7 @@ const FILE_PETA = '/data/sulawesi/sulawesi-adminareas-simplified.geojson'
 const DIR_JALAN = '/data/sulawesi/jalan'
 const JALAN_LON_AWAL = 117
 const JALAN_LAT_AWAL = -8
-const JALAN_UKURAN = 2
+const JALAN_UKURAN = 0.5
 
 // warna dan lebar garis per kelas jalan (nilai fclass)
 const GAYA_JALAN = {
