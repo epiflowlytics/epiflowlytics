@@ -1,0 +1,947 @@
+{
+  "metadata": {
+    "tahap": "1.2 Pemetaan kode ANC -> SATUSEHAT",
+    "diverifikasi_pada": "2026-10-02",
+    "sumber": [
+      "https://satusehat.kemkes.go.id/platform/docs/id/interoperability/anc/",
+      "https://satusehat.kemkes.go.id/platform/docs/id/terminology/lampiran-terminologi/anc/"
+    ],
+    "peringatan_versi": "Riwayat perubahan di situs resmi dikonfirmasi sampai v2.5. Dampak ke pemetaan ini: (1) v2.4: display kode OC000011 (Target Kenaikan BB) berubah, display baru belum terbaca, ambil dari lampiran terminologi sebelum produksi. (2) v2.5: penutupan episode kehamilan memakai PATCH, bukan PUT, berlaku untuk tahap pengiriman. (3) v2.1 dan v2.0 mengubah kode IMT, presentasi, jumlah janin, kepala terhadap PAP, gula darah, protein urin; kode di file ini diambil dari versi terbaru, tetap uji di sandbox.",
+    "status_legend": {
+      "terverifikasi": "Kode diambil langsung dari playbook ANC resmi",
+      "perlu_keputusan": "Ada di playbook tapi bentuk data di DB tidak cocok; harus diputuskan dulu",
+      "kolom_belum_ada": "Ada di playbook tapi kolom DB belum ada",
+      "tidak_ada_di_playbook_anc": "Tidak ada variabel langsung di modul ANC"
+    },
+    "versi_playbook_dicek": "v2.5 (2 Juli 2024), dicek 2026-10-02 dari halaman resmi",
+    "keputusan_terbuka": [
+      "protein_urin: form semi-kuantitatif (Negatif/+1..+4), playbook minta angka mg/dL",
+      "sifilis: pilih RPR atau VDRL sebagai tes baku, atau tambah kolom jenis tes",
+      "jarak_kehamilan: ubah kolom teks jadi numerik (bulan)",
+      "status_tt: tambah kolom tanggal imunisasi untuk T1-T5",
+      "konseling: ganti teks bebas dengan pilihan tema",
+      "diagnosis_komplikasi: lengkapi ref_icd10 sesuai Lampiran 2 playbook",
+      "edema: putuskan dipetakan ke pemeriksaan fisik Tungkai atau tidak dikirim"
+    ]
+  },
+  "systems": {
+    "loinc": "http://loinc.org",
+    "snomed": "http://snomed.info/sct",
+    "observation_category": "http://terminology.hl7.org/CodeSystem/observation-category",
+    "ucum": "http://unitsofmeasure.org",
+    "who_anc_custom": "http://fhir.org/guides/who/anc-cds/CodeSystem/anc-custom-codes",
+    "kemkes_anc_custom": "http://terminology.kemkes.go.id/CodeSystem/anc-custom-codes",
+    "kemkes_clinical_term": "http://terminology.kemkes.go.id/CodeSystem/clinical-term",
+    "v3_interpretation": "http://terminology.hl7.org/CodeSystem/v3-ObservationInterpretation"
+  },
+  "aturan_umum": [
+    "Waktu dikirim dalam UTC+00. WITA dikurangi 8 jam (contoh 17:35 WITA = 09:35 UTC).",
+    "Tanggal tidak boleh sebelum 2014-06-03.",
+    "Satu payload Observation = satu kode. Jangan gabung beberapa parameter dalam satu payload.",
+    "Nilai 'Belum diperiksa' atau kosong: jangan kirim Observation sama sekali.",
+    "Semua Observation memakai coding[0] = LOINC/SNOMED dan coding[1] = kode custom ANC."
+  ],
+  "mappings": {
+    "status_obstetri": {
+      "gravida": {
+        "sumber_db": "kehamilan.gravida",
+        "category": "survey",
+        "code": {
+          "system": "loinc",
+          "code": "11996-6",
+          "display": "[#] Pregnancies"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B6.DE24",
+          "display": "Number of pregnancies (gravida)"
+        },
+        "value": {
+          "type": "valueInteger"
+        },
+        "status": "terverifikasi"
+      },
+      "para": {
+        "sumber_db": "kehamilan.para",
+        "category": "survey",
+        "code": {
+          "system": "loinc",
+          "code": "11977-6",
+          "display": "[#] Parity"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B6.DE32",
+          "display": "Parity"
+        },
+        "value": {
+          "type": "valueInteger"
+        },
+        "status": "terverifikasi"
+      },
+      "abortus": {
+        "sumber_db": "kehamilan.abortus",
+        "category": "survey",
+        "code": {
+          "system": "loinc",
+          "code": "69043-8",
+          "display": "Other pregnancy outcomes #"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B6.DE25",
+          "display": "Number of miscarriages and/or abortions"
+        },
+        "value": {
+          "type": "valueInteger"
+        },
+        "status": "terverifikasi"
+      },
+      "hpht": {
+        "sumber_db": "kehamilan.hpht",
+        "category": "survey",
+        "code": {
+          "system": "loinc",
+          "code": "8665-2",
+          "display": "Last menstrual period start date"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B6.DE14",
+          "display": "Last menstrual period (LMP) date"
+        },
+        "value": {
+          "type": "valueDateTime"
+        },
+        "catatan": "EpisodeOfCare.period.start harus sama persis dengan HPHT.",
+        "status": "terverifikasi"
+      },
+      "hpl": {
+        "sumber_db": "kehamilan.hpl",
+        "category": "survey",
+        "code": {
+          "system": "loinc",
+          "code": "11778-8",
+          "display": "Delivery date Estimated"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B6.DE22",
+          "display": "Expected date of delivery (EDD)"
+        },
+        "value": {
+          "type": "valueDateTime"
+        },
+        "status": "terverifikasi"
+      },
+      "bb_sebelum_hamil": {
+        "sumber_db": "kehamilan.bb_sebelum_hamil",
+        "category": "survey",
+        "code": {
+          "system": "loinc",
+          "code": "56077-1",
+          "display": "Body weight --pre current pregnancy"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B8.DE2",
+          "display": "Pre-gestational weight"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "kg",
+          "ucum": "kg"
+        },
+        "status": "terverifikasi"
+      },
+      "tinggi_badan": {
+        "sumber_db": "kehamilan.tinggi_badan_cm",
+        "sumber_alternatif": "skrining.tinggi_badan",
+        "category": "vital-signs",
+        "code": {
+          "system": "loinc",
+          "code": "8302-2",
+          "display": "Body height"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B8.DE1",
+          "display": "Height"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "cm",
+          "ucum": "cm"
+        },
+        "status": "terverifikasi"
+      },
+      "imt_sebelum_hamil": {
+        "sumber_db": "dihitung: kehamilan.bb_sebelum_hamil / (kehamilan.tinggi_badan_cm/100)^2",
+        "category": "exam",
+        "code": {
+          "system": "kemkes_clinical_term",
+          "code": "OC000010",
+          "display": "Indeks Massa Tubuh Sebelum Hamil"
+        },
+        "custom": {
+          "system": "kemkes_anc_custom",
+          "code": "ANC.SS.DE58",
+          "display": "IMT Sebelum Hamil"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "kg/m2",
+          "ucum": "kg/m2"
+        },
+        "interpretation": [
+          {
+            "kondisi": "< 18.5",
+            "system": "snomed",
+            "code": "248342006",
+            "display": "Underweight",
+            "teks": "Kurus"
+          },
+          {
+            "kondisi": "18.5 - 24.9",
+            "system": "snomed",
+            "code": "43664005",
+            "display": "Normal weight",
+            "teks": "Normal"
+          },
+          {
+            "kondisi": "25.0 - 29.9",
+            "system": "snomed",
+            "code": "238131007",
+            "display": "Overweight",
+            "teks": "Gemuk"
+          },
+          {
+            "kondisi": ">= 30",
+            "system": "snomed",
+            "code": "414915002",
+            "display": "Obese",
+            "teks": "Obesitas"
+          }
+        ],
+        "status": "terverifikasi"
+      },
+      "target_kenaikan_bb": {
+        "sumber_db": "dihitung dari kategori IMT sebelum hamil",
+        "category": "exam",
+        "code": {
+          "system": "kemkes_clinical_term",
+          "code": "OC000011",
+          "display": "Target Kenaikan Berat Badan"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B8.DE10",
+          "display": "Expected weight gain"
+        },
+        "value": {
+          "type": "valueCodeableConcept",
+          "system": "kemkes_clinical_term",
+          "pilihan": [
+            {
+              "imt": ">= 30 (Obesitas)",
+              "code": "OV000008",
+              "display": "5-9 kg"
+            },
+            {
+              "imt": "25.0-29.9 (Gemuk)",
+              "code": "OV000009",
+              "display": "7-11.5 kg"
+            },
+            {
+              "imt": "18.5-24.9 (Normal)",
+              "code": "OV000010",
+              "display": "11.5-16 kg"
+            },
+            {
+              "imt": "< 18.5 (Kurus)",
+              "code": "OV000011",
+              "display": "12.5-18 kg"
+            }
+          ]
+        },
+        "catatan": "Display OC000011 diubah di playbook v2.4. Cek versi terbaru.",
+        "status": "terverifikasi"
+      },
+      "jarak_kehamilan": {
+        "sumber_db": "kehamilan.jarak_persalinan_terakhir (text)",
+        "category": "survey",
+        "code": {
+          "system": "kemkes_clinical_term",
+          "code": "OC000001",
+          "display": "Jarak kehamilan"
+        },
+        "custom": {
+          "system": "kemkes_anc_custom",
+          "code": "ANC.SS.DE53",
+          "display": "Jarak kehamilan"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "mo",
+          "ucum": "mo"
+        },
+        "catatan": "Playbook minta angka dalam bulan. Kolom DB berupa teks. Perlu kolom numerik atau parsing.",
+        "status": "perlu_keputusan"
+      }
+    },
+    "kunjungan": {
+      "usia_kehamilan": {
+        "sumber_db": "pemeriksaan_anc.usia_kehamilan_minggu",
+        "category": "survey",
+        "code": {
+          "system": "loinc",
+          "code": "18185-9",
+          "display": "Gestational age"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B6.DE17",
+          "display": "Gestational age"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "wk",
+          "ucum": "wk"
+        },
+        "status": "terverifikasi"
+      },
+      "trimester": {
+        "sumber_db": "pemeriksaan_anc.trimester",
+        "category": "survey",
+        "code": {
+          "system": "loinc",
+          "code": "32418-6",
+          "display": "Obstetric trimester Stated"
+        },
+        "custom": {
+          "system": "kemkes_anc_custom",
+          "code": "ANC.SS.DE13",
+          "display": "Trimester ke"
+        },
+        "value": {
+          "type": "valueInteger"
+        },
+        "status": "terverifikasi"
+      }
+    },
+    "pemeriksaan_ibu": {
+      "berat_badan": {
+        "sumber_db": "skrining.berat_badan",
+        "category": "vital-signs",
+        "code": {
+          "system": "loinc",
+          "code": "29463-7",
+          "display": "Body weight"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B8.DE3",
+          "display": "Current weight"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "kg",
+          "ucum": "kg"
+        },
+        "status": "terverifikasi"
+      },
+      "lila": {
+        "sumber_db": "pemeriksaan_anc.lila_cm",
+        "category": "exam",
+        "code": {
+          "system": "snomed",
+          "code": "284473002",
+          "display": "Mid upper arm circumference"
+        },
+        "custom": {
+          "system": "kemkes_anc_custom",
+          "code": "ANC.SS.DE3",
+          "display": "Lingkar Lengan Atas (LILA)"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "cm",
+          "ucum": "cm"
+        },
+        "interpretation": [
+          {
+            "kondisi": "< 23",
+            "system": "kemkes_clinical_term",
+            "code": "OI000018",
+            "display": "Kurang Energi Kronis (KEK)"
+          },
+          {
+            "kondisi": "23 - < 23.5",
+            "system": "kemkes_clinical_term",
+            "code": "OI000035",
+            "display": "Risiko Kurang Energi Kronis (KEK)"
+          },
+          {
+            "kondisi": ">= 23.5",
+            "system": "v3_interpretation",
+            "code": "N",
+            "display": "Normal"
+          }
+        ],
+        "status": "terverifikasi"
+      },
+      "tinggi_fundus": {
+        "sumber_db": "pemeriksaan_anc.tfu_cm",
+        "category": "exam",
+        "code": {
+          "system": "loinc",
+          "code": "11881-0",
+          "display": "Uterus Fundal height Tape measure"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B8.DE105",
+          "display": "Symphysis-fundal height (SFH)"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "cm",
+          "ucum": "cm"
+        },
+        "status": "terverifikasi"
+      },
+      "tekanan_darah_sistolik": {
+        "sumber_db": "skrining.sistolik",
+        "category": "vital-signs",
+        "code": {
+          "system": "loinc",
+          "code": "8480-6",
+          "display": "Systolic blood pressure"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B8.DE17",
+          "display": "Systolic blood pressure"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "mm[Hg]",
+          "ucum": "mm[Hg]"
+        },
+        "status": "terverifikasi"
+      },
+      "tekanan_darah_diastolik": {
+        "sumber_db": "skrining.diastolik",
+        "category": "vital-signs",
+        "code": {
+          "system": "loinc",
+          "code": "8462-4",
+          "display": "Diastolic blood pressure"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B8.DE19",
+          "display": "Diastolic blood pressure"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "mm[Hg]",
+          "ucum": "mm[Hg]"
+        },
+        "status": "terverifikasi"
+      },
+      "suhu": {
+        "sumber_db": "skrining.suhu",
+        "category": "vital-signs",
+        "code": {
+          "system": "loinc",
+          "code": "8310-5",
+          "display": "Body temperature"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B8.DE34",
+          "display": "Body temperature"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "C",
+          "ucum": "Cel"
+        },
+        "status": "terverifikasi"
+      },
+      "nadi": {
+        "sumber_db": null,
+        "category": "vital-signs",
+        "code": {
+          "system": "loinc",
+          "code": "8867-4",
+          "display": "Heart rate"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B8.DE36",
+          "display": "Pulse rate"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "beats/minute",
+          "ucum": "/min"
+        },
+        "catatan": "Tabel skrining belum punya kolom nadi.",
+        "status": "kolom_belum_ada"
+      },
+      "pernapasan": {
+        "sumber_db": null,
+        "category": "vital-signs",
+        "code": {
+          "system": "loinc",
+          "code": "9279-1",
+          "display": "Respiratory rate"
+        },
+        "custom": {
+          "system": "kemkes_anc_custom",
+          "code": "ANC.SS.DE2",
+          "display": "Pernapasan"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "breaths/min",
+          "ucum": "/min"
+        },
+        "catatan": "Tabel skrining belum punya kolom laju napas.",
+        "status": "kolom_belum_ada"
+      },
+      "golongan_darah": {
+        "sumber_db": "pemeriksaan_anc.golongan_darah",
+        "category": "laboratory",
+        "code": {
+          "system": "loinc",
+          "code": "883-9",
+          "display": "ABO group [Type] in Blood"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B9.DE24",
+          "display": "Blood type"
+        },
+        "value": {
+          "type": "valueCodeableConcept",
+          "system": "loinc",
+          "pilihan": {
+            "A": {
+              "code": "LA19710-5",
+              "display": "Group A"
+            },
+            "B": {
+              "code": "LA19709-7",
+              "display": "Group B"
+            },
+            "O": {
+              "code": "LA19708-9",
+              "display": "Group O"
+            },
+            "AB": {
+              "code": "LA28449-9",
+              "display": "Group AB"
+            }
+          }
+        },
+        "status": "terverifikasi"
+      },
+      "rhesus": {
+        "sumber_db": null,
+        "category": "laboratory",
+        "code": {
+          "system": "loinc",
+          "code": "10331-7",
+          "display": "Rh [Type] in Blood"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B9.DE29",
+          "display": "Rh factor"
+        },
+        "value": {
+          "type": "valueCodeableConcept",
+          "system": "loinc",
+          "pilihan": {
+            "Positif": {
+              "code": "LA6576-8",
+              "display": "Positive"
+            },
+            "Negatif": {
+              "code": "LA6577-6",
+              "display": "Negative"
+            }
+          }
+        },
+        "catatan": "DB hanya menyimpan A/B/AB/O. Kolom rhesus belum ada.",
+        "status": "kolom_belum_ada"
+      }
+    },
+    "pemeriksaan_janin": {
+      "djj": {
+        "sumber_db": "pemeriksaan_anc.djj",
+        "category": "exam",
+        "code": {
+          "system": "loinc",
+          "code": "55283-6",
+          "display": "Fetal Heart rate"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B8.DE107",
+          "display": "Fetal heart rate"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "{beats}/min",
+          "ucum": "{beats}/min"
+        },
+        "status": "terverifikasi"
+      },
+      "presentasi": {
+        "sumber_db": "pemeriksaan_anc.presentasi",
+        "category": "exam",
+        "code": {
+          "system": "loinc",
+          "code": "72155-5",
+          "display": "Position in womb Fetus [RHEA]"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B8.DE111",
+          "display": "Fetal presentation"
+        },
+        "value": {
+          "type": "valueCodeableConcept",
+          "system": "snomed",
+          "pilihan": {
+            "KEP": {
+              "code": "1209182005",
+              "display": "Cephalic fetal presentation",
+              "arti": "Presentasi kepala"
+            },
+            "SU": {
+              "code": "6096002",
+              "display": "Breech presentation",
+              "arti": "Sungsang / bokong"
+            },
+            "LI": {
+              "code": "288203005",
+              "display": "Transverse/oblique lie",
+              "arti": "Letak lintang"
+            }
+          }
+        },
+        "catatan": "Di form: SU = sungsang, LI = lintang. Kosong = tidak dikirim.",
+        "status": "terverifikasi"
+      }
+    },
+    "pemeriksaan_10t_lab": {
+      "hemoglobin": {
+        "sumber_db": "pemeriksaan_anc.hb",
+        "category": "laboratory",
+        "code": {
+          "system": "loinc",
+          "code": "718-7",
+          "display": "Hemoglobin [Mass/volume] in Blood"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B9.DE175",
+          "display": "Blood hemoglobin test conducted"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "g/dL",
+          "ucum": "g/dL"
+        },
+        "status": "terverifikasi"
+      },
+      "hiv": {
+        "sumber_db": "pemeriksaan_anc.hiv",
+        "category": "laboratory",
+        "code": {
+          "system": "loinc",
+          "code": "68961-2",
+          "display": "HIV 1 Ab [Presence] in Serum, Plasma or Blood by Rapid immunoassay"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B9.DE32",
+          "display": "HIV test"
+        },
+        "value": {
+          "type": "valueCodeableConcept",
+          "system": "snomed",
+          "pilihan": {
+            "Reaktif": {
+              "code": "11214006",
+              "display": "Reactive"
+            },
+            "Non-reaktif": {
+              "code": "131194007",
+              "display": "Non-Reactive"
+            },
+            "Belum diperiksa": null
+          }
+        },
+        "status": "terverifikasi"
+      },
+      "sifilis": {
+        "sumber_db": "pemeriksaan_anc.sifilis",
+        "category": "laboratory",
+        "code_opsi": [
+          {
+            "tes": "RPR",
+            "system": "loinc",
+            "code": "20508-8",
+            "display": "Reagin Ab [Units/volume] in Serum or Plasma by RPR"
+          },
+          {
+            "tes": "VDRL",
+            "system": "loinc",
+            "code": "14904-7",
+            "display": "Reagin Ab [Presence] in Specimen by VDRL"
+          }
+        ],
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B9.DE96",
+          "display": "Syphilis test conducted"
+        },
+        "value": {
+          "type": "valueCodeableConcept",
+          "system": "snomed",
+          "pilihan": {
+            "Reaktif": {
+              "code": "11214006",
+              "display": "Reactive"
+            },
+            "Non-reaktif": {
+              "code": "131194007",
+              "display": "Non-Reactive"
+            },
+            "Belum diperiksa": null
+          }
+        },
+        "catatan": "Playbook membedakan RPR dan VDRL. Form hanya punya satu kolom 'sifilis'. Perlu diputuskan: tambah kolom jenis tes, atau tetapkan satu tes baku di Puskesmas.",
+        "status": "perlu_keputusan"
+      },
+      "hepatitis_b": {
+        "sumber_db": "pemeriksaan_anc.hepatitis_b",
+        "category": "laboratory",
+        "code": {
+          "system": "loinc",
+          "code": "75410-1",
+          "display": "Hepatitis B virus surface Ag [Presence] in Serum, Plasma or Blood by Rapid immunoassay"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B9.DE60",
+          "display": "Hepatitis B test conducted"
+        },
+        "value": {
+          "type": "valueCodeableConcept",
+          "system": "snomed",
+          "pilihan": {
+            "Reaktif": {
+              "code": "11214006",
+              "display": "Reactive"
+            },
+            "Non-reaktif": {
+              "code": "131194007",
+              "display": "Non-Reactive"
+            },
+            "Belum diperiksa": null
+          }
+        },
+        "status": "terverifikasi"
+      },
+      "gula_darah": {
+        "sumber_db": "pemeriksaan_anc.gula_darah",
+        "category": "laboratory",
+        "code": {
+          "system": "loinc",
+          "code": "74774-1",
+          "display": "Glucose [Mass/volume] in Serum, Plasma or Blood"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B9.DE159",
+          "display": "Blood glucose test conducted"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "mg/dL",
+          "ucum": "mg/dL"
+        },
+        "catatan": "Playbook menyebut 'Gula Darah Sewaktu'. Pastikan angka di form memang dalam mg/dL.",
+        "status": "terverifikasi"
+      },
+      "protein_urin": {
+        "sumber_db": "pemeriksaan_anc.protein_urin",
+        "category": "laboratory",
+        "code": {
+          "system": "loinc",
+          "code": "5804-0",
+          "display": "Protein [mass/volume] in urine by test strip"
+        },
+        "custom": {
+          "system": "who_anc_custom",
+          "code": "ANC.B9.DE114",
+          "display": "Urine test conducted"
+        },
+        "value": {
+          "type": "valueQuantity",
+          "unit": "mg/dL",
+          "ucum": "mg/dL"
+        },
+        "catatan": "Playbook minta angka mg/dL. Form menyimpan Negatif/+1/+2/+3/+4 (semi-kuantitatif). Tidak bisa dikirim apa adanya. Perlu keputusan: tanya Tim SATUSEHAT apakah hasil strip boleh dikirim sebagai kode, atau ubah form jadi angka.",
+        "status": "perlu_keputusan"
+      }
+    },
+    "di_luar_observation_anc": {
+      "status_tt": {
+        "sumber_db": "pemeriksaan_anc.status_tt (T0-T5)",
+        "resource": "Immunization",
+        "vaccine": {
+          "system": "http://sys-ids.kemkes.go.id/kfa",
+          "code": "VG139",
+          "display": "Td"
+        },
+        "pemetaan": {
+          "T0": {
+            "status": "not-done",
+            "occurrence": "occurenceString"
+          },
+          "T1": {
+            "status": "completed",
+            "doseNumberPositiveInt": 1
+          },
+          "T2": {
+            "status": "completed",
+            "doseNumberPositiveInt": 2
+          },
+          "T3": {
+            "status": "completed",
+            "doseNumberPositiveInt": 3
+          },
+          "T4": {
+            "status": "completed",
+            "doseNumberPositiveInt": 4
+          },
+          "T5": {
+            "status": "completed",
+            "doseNumberPositiveInt": 5
+          }
+        },
+        "reason": {
+          "system": "http://terminology.kemkes.go.id/CodeSystem/immunization-reason",
+          "code": "IM-WUS"
+        },
+        "catatan": "Untuk T1-T5 playbook mewajibkan tanggal imunisasi (occurenceDateTime). DB hanya menyimpan status, tanpa tanggal.",
+        "status": "perlu_keputusan"
+      },
+      "konseling": {
+        "sumber_db": "pemeriksaan_anc.konseling (teks bebas)",
+        "resource": "Procedure",
+        "kode_tema": [
+          {
+            "system": "snomed",
+            "code": "61310001",
+            "display": "Nutrition education"
+          },
+          {
+            "system": "kemkes_clinical_term",
+            "code": "ED000008",
+            "display": "Edukasi Tanda Bahaya Kehamilan, Bersalin dan Nifas"
+          },
+          {
+            "system": "kemkes_clinical_term",
+            "code": "ED000009",
+            "display": "Edukasi IMD dan ASI Eksklusif"
+          },
+          {
+            "system": "kemkes_clinical_term",
+            "code": "ED000010",
+            "display": "Edukasi PHBS"
+          },
+          {
+            "system": "kemkes_clinical_term",
+            "code": "ED000011",
+            "display": "Edukasi KB pasca salin"
+          },
+          {
+            "system": "kemkes_clinical_term",
+            "code": "ED000012",
+            "display": "Edukasi lainnya"
+          }
+        ],
+        "tidak_diberikan": {
+          "status": "not-done",
+          "system": "snomed",
+          "code": "409073007",
+          "display": "Education"
+        },
+        "catatan": "Satu payload Procedure per tema. Teks bebas harus diganti pilihan tema.",
+        "status": "perlu_keputusan"
+      },
+      "diagnosis_komplikasi": {
+        "sumber_db": "pemeriksaan.diagnosis, pemeriksaan.kode_icd",
+        "resource": "Condition + Encounter.diagnosis",
+        "code_system": "http://hl7.org/fhir/sid/icd-10",
+        "catatan": "Daftar ICD-10 komplikasi kehamilan ada di Lampiran 2 playbook ANC. ref_icd10 di DB baru 203 baris contoh.",
+        "status": "perlu_keputusan"
+      }
+    },
+    "tidak_ada_di_playbook_anc": {
+      "edema": {
+        "sumber_db": "pemeriksaan_anc.edema",
+        "catatan": "Tidak ada variabel edema. Paling dekat: pemeriksaan fisik Tungkai (SNOMED 116312005, ANC.SS.DE34, interpretasi N/A). Perlu keputusan.",
+        "status": "perlu_keputusan"
+      },
+      "jumlah_ttd": {
+        "sumber_db": "pemeriksaan_anc.jumlah_ttd",
+        "catatan": "Obat dikirim lewat Medication/MedicationDispense dengan kode KFA. Bukan Observation.",
+        "status": "tidak_ada_di_playbook_anc"
+      },
+      "klasifikasi_risiko": {
+        "sumber_db": "pemeriksaan_anc.klasifikasi_risiko",
+        "status": "tidak_ada_di_playbook_anc"
+      },
+      "faktor_risiko": {
+        "sumber_db": "pemeriksaan_anc.faktor_risiko",
+        "catatan": "Faktor risiko diwakili Condition (ICD-10) dan QuestionnaireResponse pemantauan (usia <21, jarak <2 th, usia >35, anak >3).",
+        "status": "tidak_ada_di_playbook_anc"
+      },
+      "keluhan": {
+        "sumber_db": "pemeriksaan_anc.keluhan",
+        "status": "tidak_ada_di_playbook_anc"
+      },
+      "pemeriksaan_khusus": {
+        "sumber_db": "pemeriksaan_anc.pemeriksaan_khusus",
+        "status": "tidak_ada_di_playbook_anc"
+      },
+      "internal_tidak_dikirim": {
+        "kolom": [
+          "kunjungan_ke",
+          "jenis_kontak",
+          "kontak_dokter",
+          "k1_murni"
+        ],
+        "catatan": "Penanda internal K1-K6. Tidak ada padanan di playbook."
+      }
+    },
+    "belum_ada_di_db_tapi_ada_di_playbook": [
+      "Posisi kepala terhadap PAP (SNOMED 249111004)",
+      "Taksiran berat janin (LOINC 89087-1)",
+      "Jumlah janin (SNOMED 246435002)",
+      "Merokok (LOINC 72166-2) dan konsumsi alkohol (LOINC 11331-6)",
+      "Pemeriksaan fisik: konjungtiva, sklera, leher, gigi/mulut, THT, jantung, paru, perut, tungkai",
+      "Makanan tambahan ibu hamil, disabilitas, kelas ibu hamil (QuestionnaireResponse)"
+    ]
+  }
+}

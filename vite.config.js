@@ -17,16 +17,20 @@ function getLocalIP() {
   return 'localhost'
 }
 
+// Mode tunnel HTTPS (Cloudflare Tunnel / ngrok) untuk menguji lokasi GPS di HP.
+// Jalankan dengan: PowerShell  -> $env:TUNNEL=1; npm run dev
+//                  CMD         -> set TUNNEL=1&& npm run dev
+const pakaiTunnel = process.env.TUNNEL === '1'
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     host: true, // dengarkan di semua alamat jaringan, bukan cuma localhost
-    // Supaya koneksi hot-reload (HMR) tidak mencoba connect balik ke
-    // IP yang sudah kadaluarsa saat dibuka dari HP — inilah penyebab
-    // paling umum layar putih kosong / HMR gagal connect.
-    hmr: {
-      host: getLocalIP(),
-    },
+    // Izinkan alamat tunnel; tanpa ini Vite menolak dengan "Blocked request. This host is not allowed".
+    allowedHosts: ['.trycloudflare.com', '.ngrok-free.app', '.ngrok.app'],
+    // Tanpa tunnel: HMR ke IP lokal supaya tidak layar putih saat dibuka dari HP lewat Wi-Fi.
+    // Lewat tunnel (HTTPS): HMR lewat port 443 dari alamat tunnel itu sendiri.
+    hmr: pakaiTunnel ? { clientPort: 443 } : { host: getLocalIP() },
   },
 })

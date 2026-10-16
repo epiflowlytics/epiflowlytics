@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 // FormANC — form pemeriksaan kehamilan (Antenatal Care) untuk Poli KIA.
 // Komponen "controlled": data disimpan di DashboardKIA, form ini hanya menampilkan
@@ -25,6 +25,41 @@ const STATUS_KEHAMILAN = ['aktif', 'selesai', 'keguguran']
 //    (di trimester 1 BB memang sering belum naik)
 export const BATAS_NAIK_CEPAT_KG_PER_MINGGU = 1
 export const MINGGU_MULAI_PANTAU_BB = 14
+
+// Ambang peringatan tekanan darah tinggi (silakan sesuaikan dengan pedoman klinis Puskesmas):
+// peringatan muncul bila sistolik >= 140 ATAU diastolik >= 90 mmHg.
+export const BATAS_TD_SISTOLIK = 140
+export const BATAS_TD_DIASTOLIK = 90
+
+// Mengembalikan teks peringatan, atau null kalau TD normal / belum lengkap.
+export function peringatanTD(sistolik, diastolik) {
+  const sis = toNum(sistolik)
+  const dia = toNum(diastolik)
+  if (sis === null || dia === null) return null
+  if (sis < BATAS_TD_SISTOLIK && dia < BATAS_TD_DIASTOLIK) return null
+  return `Tekanan darah ${sis}/${dia} mmHg (batas ${BATAS_TD_SISTOLIK}/${BATAS_TD_DIASTOLIK}). Cek proteinuria dan pertimbangkan rujukan sesuai pedoman klinis Puskesmas.`
+}
+
+// Ambang anemia ibu hamil (g/dL), umumnya di bawah 11. Silakan sesuaikan dengan pedoman klinis Puskesmas.
+export const BATAS_HB_ANEMIA = 11
+
+// Mengembalikan teks peringatan, atau null kalau Hb normal / belum diisi.
+export function peringatanHb(hb) {
+  const n = toNum(hb)
+  if (n === null || n <= 0 || n >= BATAS_HB_ANEMIA) return null
+  return `Hb ${n} g/dL, di bawah ${BATAS_HB_ANEMIA} g/dL (anemia). Catat tindakan di kolom "Tindakan dan Terapi" (mis. tablet FE, konseling, pemeriksaan lanjutan atau rujukan) sesuai pedoman klinis Puskesmas.`
+}
+
+// Ambang KEK (Kurang Energi Kronis) ibu hamil: LiLA di bawah 23,5 cm. Silakan sesuaikan dengan pedoman Puskesmas.
+export const BATAS_LILA_KEK = 23.5
+export const CATATAN_KEK = 'LiLA < 23,5 cm (KEK): PMT dan konseling gizi'
+
+// Mengembalikan teks peringatan, atau null kalau LiLA normal / belum diisi.
+export function peringatanKEK(lila) {
+  const n = toNum(lila)
+  if (n === null || n <= 0 || n >= BATAS_LILA_KEK) return null
+  return `LiLA ${n} cm, di bawah ${BATAS_LILA_KEK} cm (risiko KEK). Berikan PMT (Pemberian Makanan Tambahan) dan konseling gizi, lalu catat di kolom \"Tindakan dan Terapi\".`
+}
 
 // Saran isian (datalist) — tetap bisa diketik bebas
 const SARAN = {
@@ -284,6 +319,7 @@ export function tglPendek(s) {
 export function ringkasLab(r) {
   return [
     !kosong(r.hb) && `Hb ${r.hb}`,
+    !kosong(r.lila_cm) && `LiLA ${r.lila_cm}`,
     sudahDiperiksa(r.protein_urin) && `Prot.urin ${r.protein_urin}`,
     !kosong(r.gula_darah) && `GDS ${r.gula_darah}`,
     sudahDiperiksa(r.hiv) && `HIV ${r.hiv}`,
@@ -367,6 +403,126 @@ function SelBB({ a }) {
   )
 }
 
+// ---- Tindak lanjut hasil skrining reaktif (HIV, sifilis, HBsAg) ----
+// Disimpan terpisah di tabel `tindak_lanjut_skrining` (satu baris per tindak lanjut, per kehamilan),
+// bukan di baris kunjungan, supaya riwayat versi pemeriksaan_anc tidak ikut berubah.
+export const TES_REAKTIF = [
+  { jenis: 'HIV', kolom: 'hiv' },
+  { jenis: 'Sifilis', kolom: 'sifilis' },
+  { jenis: 'HBsAg', kolom: 'hepatitis_b' },
+]
+export const JENIS_TINDAKAN = ['Rujukan', 'Pengobatan', 'Konseling']
+
+// Daftar jenis tes yang Reaktif: pada kunjungan ini ATAU pada kunjungan sebelumnya yang masih berlaku.
+// Kunjungan sebelumnya ikut dihitung supaya tindak lanjut tetap bisa dicatat saat pasien datang lagi
+// (hasil lab sering datang setelah pasien pulang), sama seperti aturan penanda merah di database.
+export function jenisReaktif(value, kunjunganLalu = []) {
+  const baris = [value, ...(kunjunganLalu ?? []).filter((r) => r && r.berlaku !== false && !r.dibatalkan_pada)]
+  return TES_REAKTIF.filter((t) => baris.some((r) => r?.[t.kolom] === 'Reaktif')).map((t) => t.jenis)
+}
+
+// Jenis tes reaktif yang belum punya tindak lanjut tercatat. Kosong = semua sudah tertangani.
+// Untuk penanda saja; di Puskesmas aturannya longgar (simpan kunjungan tetap boleh).
+export function tindakLanjutBelumLengkap(value, tindakLanjut = [], kunjunganLalu = []) {
+  const ada = new Set((tindakLanjut ?? []).map((t) => t.jenis))
+  return jenisReaktif(value, kunjunganLalu).filter((j) => !ada.has(j))
+}
+
+const KOSONG_TL = { jenis_tindakan: 'Rujukan', tujuan: '', tanggal: '', catatan: '' }
+
+function PanelTindakLanjut({ value, kunjunganLalu, tindakLanjut, onSimpan, kehamilanTersimpan }) {
+  const [draf, setDraf] = useState({})
+  const [sibuk, setSibuk] = useState('')
+  const [galat, setGalat] = useState({})
+  const reaktif = jenisReaktif(value, kunjunganLalu)
+  if (reaktif.length === 0) return null
+
+  const hariIni = formatTanggal(new Date())
+  const ambil = (j) => ({ ...KOSONG_TL, tanggal: hariIni, ...(draf[j] ?? {}) })
+  const ubah = (j, k) => (e) => setDraf((d) => ({ ...d, [j]: { ...ambil(j), [k]: e.target.value } }))
+
+  async function simpan(j) {
+    const d = ambil(j)
+    if (!d.tanggal) return setGalat((g) => ({ ...g, [j]: 'Tanggal wajib diisi' }))
+    if (d.jenis_tindakan !== 'Konseling' && !d.tujuan.trim())
+      return setGalat((g) => ({ ...g, [j]: d.jenis_tindakan === 'Rujukan' ? 'Tujuan rujukan wajib diisi' : 'Nama obat wajib diisi' }))
+    setSibuk(j)
+    setGalat((g) => ({ ...g, [j]: '' }))
+    const err = await onSimpan?.({
+      jenis: j,
+      jenis_tindakan: d.jenis_tindakan,
+      tanggal: d.tanggal,
+      tujuan: d.tujuan.trim() || null,
+      catatan: d.catatan.trim() || null,
+    })
+    setSibuk('')
+    if (err) setGalat((g) => ({ ...g, [j]: err }))
+    else setDraf((x) => ({ ...x, [j]: undefined }))
+  }
+
+  return (
+    <>
+      {reaktif.map((j) => {
+        const sudah = (tindakLanjut ?? []).filter((t) => t.jenis === j)
+        if (sudah.length > 0) {
+          return (
+            <div key={j} style={{ border: '1px solid #16a34a', background: '#f0fdf4', color: '#166534', borderRadius: 6, padding: '6px 10px', fontSize: 12 }}>
+              ✓ {j} reaktif, tindak lanjut tercatat:{' '}
+              {sudah.map((t) => `${t.jenis_tindakan}${t.tujuan ? ` (${t.tujuan})` : ''}, ${tglIndo(t.tanggal)}`).join('; ')}
+            </div>
+          )
+        }
+        const d = ambil(j)
+        const labelTujuan = d.jenis_tindakan === 'Rujukan' ? 'Tujuan rujukan' : d.jenis_tindakan === 'Pengobatan' ? 'Obat / terapi' : 'Tujuan (opsional)'
+        return (
+          <div key={j} role="alert" style={{ border: '1px solid var(--danger, #b42318)', background: '#fef3f2', color: '#000', borderRadius: 6, padding: '8px 10px', fontSize: 12 }}>
+            <div style={{ ...merah, fontSize: 13 }}>⚠ {j} reaktif: tindak lanjut belum dicatat</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 6, marginTop: 6 }}>
+              <label>
+                Jenis tindakan
+                <select style={fIn} value={d.jenis_tindakan} onChange={ubah(j, 'jenis_tindakan')}>
+                  {JENIS_TINDAKAN.map((x) => (
+                    <option key={x} value={x}>
+                      {x}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                {labelTujuan}
+                <input style={fIn} value={d.tujuan} onChange={ubah(j, 'tujuan')} />
+              </label>
+              <label>
+                Tanggal
+                <input style={fIn} type="date" value={d.tanggal} onChange={ubah(j, 'tanggal')} />
+              </label>
+              <label>
+                Catatan
+                <input style={fIn} value={d.catatan} onChange={ubah(j, 'catatan')} />
+              </label>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 6, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                disabled={sibuk === j || !kehamilanTersimpan}
+                onClick={() => simpan(j)}
+                style={{ fontSize: 12, padding: '4px 10px', border: '1px solid var(--danger, #b42318)', background: '#fff', color: 'var(--danger, #b42318)', borderRadius: 4, cursor: 'pointer', fontWeight: 700 }}
+              >
+                {sibuk === j ? 'Menyimpan...' : 'Simpan tindak lanjut'}
+              </button>
+              {!kehamilanTersimpan && <span>Simpan kunjungan ini dulu supaya data kehamilan tersimpan.</span>}
+              {galat[j] && <span style={merah}>{galat[j]}</span>}
+            </div>
+          </div>
+        )
+      })}
+      <div style={{ fontSize: 11, color: '#6b7280' }}>
+        Kunjungan tetap bisa disimpan sebelum tindak lanjut dicatat; penanda merah di dashboard hilang setelah tindak lanjut tersimpan.
+      </div>
+    </>
+  )
+}
+
 export default function FormANC({
   kehamilan,
   onKehamilan,
@@ -378,6 +534,8 @@ export default function FormANC({
   instansi = null,
   paraf = '',
   disentuhRef = null, // dari DashboardKIA; kalau tidak ada, dicatat di dalam komponen ini saja
+  tindakLanjut = [], // baris tindak_lanjut_skrining kehamilan ini
+  onSimpanTindakLanjut = null, // async (data) => teks galat | null
 }) {
   const disentuhLokal = useRef({})
   const disentuh = disentuhRef ?? disentuhLokal // kolom yang sudah diubah petugas (tidak diisi ulang otomatis)
@@ -434,6 +592,12 @@ export default function FormANC({
   const analisisPer = Object.fromEntries(analisis.map((a) => [a.tanggal, a]))
   const akhir = analisis.length ? analisis[analisis.length - 1] : null
   const imt = bbSebelum && tb ? bbSebelum / Math.pow(tb / 100, 2) : null
+  const pesanTD = peringatanTD(skrining.sistolik, skrining.diastolik)
+  const pesanHb = peringatanHb(value.hb)
+  const pesanKEK = peringatanKEK(value.lila_cm)
+  const kekSudahDicatat = String(value.konseling ?? '').includes(CATATAN_KEK)
+  const catatKEK = () =>
+    onChange({ ...value, konseling: [value.konseling, CATATAN_KEK].filter((x) => !kosong(x) && String(x).trim() !== '').join('; ') })
 
   // Nomor kunjungan & jenis kontak (K1-K6) dihitung database. Sebelum tersimpan, tampilkan perkiraan.
   const sudahTerhitung = !kosong(value.kunjungan_ke)
@@ -666,6 +830,49 @@ export default function FormANC({
           </div>
         </div>
       </details>
+
+      {pesanTD && (
+        <div
+          role="alert"
+          style={{ border: '1px solid var(--danger, #b42318)', background: '#fef3f2', color: 'var(--danger, #b42318)', borderRadius: 6, padding: '8px 10px', fontSize: 13, fontWeight: 700 }}
+        >
+          ⚠ {pesanTD}
+        </div>
+      )}
+      {pesanHb && (
+        <div
+          role="alert"
+          style={{ border: '1px solid var(--danger, #b42318)', background: '#fef3f2', color: 'var(--danger, #b42318)', borderRadius: 6, padding: '8px 10px', fontSize: 13, fontWeight: 700 }}
+        >
+          ⚠ {pesanHb}
+        </div>
+      )}
+      <PanelTindakLanjut
+        value={value}
+        kunjunganLalu={kunjunganLalu}
+        tindakLanjut={tindakLanjut}
+        onSimpan={onSimpanTindakLanjut}
+        kehamilanTersimpan={tersimpan}
+      />
+      {pesanKEK && (
+        <div
+          role="alert"
+          style={{ border: '1px solid var(--danger, #b42318)', background: '#fef3f2', color: 'var(--danger, #b42318)', borderRadius: 6, padding: '8px 10px', fontSize: 13, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}
+        >
+          <span style={{ flex: '1 1 320px' }}>⚠ {pesanKEK}</span>
+          {kekSudahDicatat ? (
+            <span style={{ fontWeight: 400 }}>✓ Sudah dicatat di Tindakan dan Terapi</span>
+          ) : (
+            <button
+              type="button"
+              onClick={catatKEK}
+              style={{ fontSize: 12, padding: '4px 10px', border: '1px solid var(--danger, #b42318)', background: '#fff', color: 'var(--danger, #b42318)', borderRadius: 4, cursor: 'pointer', fontWeight: 700 }}
+            >
+              Catat PMT &amp; konseling gizi
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ===== tabel kunjungan ===== */}
       <div style={{ overflowX: 'auto' }}>

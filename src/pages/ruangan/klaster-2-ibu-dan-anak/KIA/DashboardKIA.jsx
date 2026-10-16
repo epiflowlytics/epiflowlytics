@@ -12,7 +12,12 @@ import FormANC, {
   siapkanDataKehamilan,
 } from './form/FormANC'
 import KartuIbu from './form/KartuIbu'
+import SkriningJiwa, { emptyJiwa, jiwaDariRow, siapkanDataJiwa, validasiJiwa } from './form/SkriningJiwa'
+import SkriningTBMalaria, { emptyTbm, tbmDariRow, siapkanDataTbm, validasiTbm, tbmTerisi } from './form/SkriningTBMalaria'
+import TandaBahaya, { emptyBahaya, bahayaDariRow, siapkanDataBahaya, validasiBahaya, nilaiBahaya } from './form/TandaBahaya'
 import PilihICD, { KODE_LAINNYA } from './form/PilihICD'
+import PetaDistribusi from './PetaDistribusi'
+import InputPasienPeta from './InputPasienPeta'
 
 // Dashboard KIA — Poli KIA
 // Alur: antrian poli KIA hari ini -> pilih pasien -> skrining (TTV) + pemeriksaan KIA
@@ -111,8 +116,20 @@ export default function DashboardKIA() {
   const [kehamilan, setKehamilan] = useState(emptyKehamilan)
   const [riwayatANC, setRiwayatANC] = useState([]) // pemeriksaan_anc kehamilan aktif (+ kunjungan & skrining)
   const [kartuTerbuka, setKartuTerbuka] = useState(false)
+  const [tampilan, setTampilan] = useState('antrian')
+  const [jiwa, setJiwa] = useState(emptyJiwa) // skrining jiwa (SRQ-20) kunjungan ini
+  const [riwayatJiwa, setRiwayatJiwa] = useState([]) // skrining jiwa kunjungan sebelumnya pada kehamilan aktif
+  const [jiwaPositif, setJiwaPositif] = useState([]) // rekap seluruh skrining jiwa positif (semua pasien)
+  const [jiwaTerbuka, setJiwaTerbuka] = useState(false)
+  const [tbm, setTbm] = useState(emptyTbm) // skrining TB + malaria kunjungan ini
+  const [riwayatTbm, setRiwayatTbm] = useState([]) // skrining TB/malaria kunjungan sebelumnya pada kehamilan aktif
+  const [endemisMalaria, setEndemisMalaria] = useState(false) // konfigurasi wilayah: instansi.endemis_malaria
+  const [bahaya, setBahaya] = useState(emptyBahaya) // tanda bahaya kehamilan + edukasi kunjungan ini
+  const [riwayatBahaya, setRiwayatBahaya] = useState([]) // tanda bahaya kunjungan sebelumnya pada kehamilan aktif
   const [suamiRM, setSuamiRM] = useState(null) // suami pasien di rekam medis (satu No. KK), kalau ada
   const [instansiKop, setInstansiKop] = useState(null)
+  const [tindakLanjut, setTindakLanjut] = useState([]) // tindak_lanjut_skrining untuk kehamilan terpilih
+  const [penanda, setPenanda] = useState([]) // hasil reaktif yang belum ditindaklanjuti (semua pasien)
   const disentuhRef = useRef({}) // kolom kartu ibu yang sudah diubah petugas (bertahan walau form dirender ulang)
   const pilihanRef = useRef(null) // id kunjungan terpilih, untuk membuang hasil muat yang sudah usang
   const resepTersimpanRef = useRef(null) // id kunjungan yang resepnya sudah masuk (cegah resep ganda saat simpan ulang)
@@ -125,6 +142,52 @@ export default function DashboardKIA() {
         .sort((a, b) => (a.kunjungan?.tanggal_periksa ?? '').localeCompare(b.kunjungan?.tanggal_periksa ?? '')),
     [riwayatANC, terpilih]
   )
+
+  // pasien_id -> daftar jenis tes reaktif yang belum ditindaklanjuti (untuk penanda merah)
+  const penandaPerPasien = useMemo(() => {
+    const m = {}
+    penanda.forEach((r) => {
+      ;(m[r.pasien_id] ??= []).push(r.jenis)
+    })
+    return m
+  }, [penanda])
+  const pasienPenanda = useMemo(() => {
+    const m = new Map()
+    penanda.forEach((r) => {
+      if (!m.has(r.pasien_id)) m.set(r.pasien_id, { nama: r.nama_lengkap, rm: r.no_rekam_medis, jenis: [] })
+      m.get(r.pasien_id).jenis.push(r.jenis)
+    })
+    return [...m.values()]
+  }, [penanda])
+
+  const muatPenanda = useCallback(async () => {
+    const { data, error } = await supabase.rpc('reaktif_belum_tertangani', { p_pasien_ids: null })
+    if (!error) setPenanda((lama) => (JSON.stringify(lama) === JSON.stringify(data ?? []) ? lama : data ?? []))
+  }, [])
+
+  useEffect(() => {
+    muatPenanda()
+    const t = setInterval(muatPenanda, 30000)
+    return () => clearInterval(t)
+  }, [muatPenanda])
+
+  // Rekap seluruh skrining jiwa positif; yang ada pikiran mengakhiri hidup di urutan teratas.
+  const muatJiwaPositif = useCallback(async () => {
+    const { data, error } = await supabase
+      .from('skrining_jiwa_anc')
+      .select('id, skor, ada_ide_bunuh_diri, tindak_lanjut, catatan, created_at, kunjungan:kunjungan_id(tanggal_periksa), kehamilan:kehamilan_id(pasien:pasien_id(nama_lengkap, no_rekam_medis))')
+      .eq('hasil_positif', true)
+      .order('created_at', { ascending: false })
+      .limit(500)
+    if (error) return
+    setJiwaPositif(
+      (data ?? []).sort((a, b) => Number(b.ada_ide_bunuh_diri) - Number(a.ada_ide_bunuh_diri))
+    )
+  }, [])
+
+  useEffect(() => {
+    muatJiwaPositif()
+  }, [muatJiwaPositif])
 
   // FormANC/KartuIbu masih membaca skrining.tekanan_darah (teks) hanya untuk tampilan -> turunkan dari 2 angka
   const skrininguntukForm = useMemo(
@@ -160,6 +223,13 @@ export default function DashboardKIA() {
           .eq('id', data.instansi_id)
           .maybeSingle()
         if (!batal) setInstansiKop(ins ?? null)
+        // konfigurasi wilayah endemis malaria (query terpisah: kalau kolom belum dibuat, kop surat tetap jalan)
+        const { data: cfg, error: errCfg } = await supabase
+          .from('instansi')
+          .select('endemis_malaria')
+          .eq('id', data.instansi_id)
+          .maybeSingle()
+        if (!batal && !errCfg) setEndemisMalaria(cfg?.endemis_malaria === true)
       }
     }
     muatPoli()
@@ -241,6 +311,13 @@ export default function DashboardKIA() {
     setAnc(emptyANC)
     setKehamilan(emptyKehamilan)
     setRiwayatANC([])
+    setJiwa(emptyJiwa)
+    setRiwayatJiwa([])
+    setTbm(emptyTbm)
+    setRiwayatTbm([])
+    setBahaya(emptyBahaya)
+    setRiwayatBahaya([])
+    setTindakLanjut([])
     setKartuTerbuka(false)
     setSuamiRM(null)
     disentuhRef.current = {}
@@ -288,6 +365,12 @@ export default function DashboardKIA() {
       setKehamilan({ ...emptyKehamilan, tinggi_badan_cm: sk?.tinggi_badan ?? '' })
       setRiwayatANC([])
       setAnc({ ...emptyANC, keluhan: sk?.keluhan_utama ?? '' })
+      setJiwa(emptyJiwa)
+      setRiwayatJiwa([])
+      setTbm(emptyTbm)
+      setRiwayatTbm([])
+      setBahaya(emptyBahaya)
+      setRiwayatBahaya([])
       return
     }
     const { data: rows, error: errRows } = await supabase
@@ -303,6 +386,10 @@ export default function DashboardKIA() {
     )
     setKehamilan(kehamilanDariRow(kh))
     setRiwayatANC(semua)
+    muatTindakLanjut(kh.id, k.id)
+    muatJiwa(kh.id, k.id)
+    muatTbm(kh.id, k.id)
+    muatBahaya(kh.id, k.id)
     const ini = semua.find((r) => r.kunjungan_id === k.id) // kunjungan ini pernah tersimpan sebagian
     if (ini) {
       setAnc(ancDariRow(ini))
@@ -310,6 +397,87 @@ export default function DashboardKIA() {
       // kunjungan_ke dan jenis_kontak (K1-K6) dihitung database saat disimpan
       setAnc({ ...emptyANC, keluhan: sk?.keluhan_utama ?? '' })
     }
+  }
+
+  // Skrining jiwa kehamilan ini: baris kunjungan ini mengisi form, sisanya jadi riwayat.
+  async function muatJiwa(kehamilanId, kunjunganId) {
+    const { data, error } = await supabase
+      .from('skrining_jiwa_anc')
+      .select('*, kunjungan:kunjungan_id(tanggal_periksa)')
+      .eq('kehamilan_id', kehamilanId)
+    if (pilihanRef.current !== kunjunganId) return
+    if (error) {
+      setPesan({ tipe: 'err', teks: 'Gagal memuat skrining jiwa: ' + error.message })
+      return
+    }
+    const urut = (data ?? []).sort((a, b) =>
+      (a.kunjungan?.tanggal_periksa ?? '').localeCompare(b.kunjungan?.tanggal_periksa ?? '')
+    )
+    const ini = urut.find((r) => r.kunjungan_id === kunjunganId)
+    setRiwayatJiwa(urut.filter((r) => r.kunjungan_id !== kunjunganId))
+    setJiwa(ini ? jiwaDariRow(ini) : emptyJiwa)
+  }
+
+  // Skrining TB/malaria kehamilan ini: baris kunjungan ini mengisi form, sisanya jadi riwayat.
+  async function muatTbm(kehamilanId, kunjunganId) {
+    const { data, error } = await supabase
+      .from('skrining_tb_malaria_anc')
+      .select('*, kunjungan:kunjungan_id(tanggal_periksa)')
+      .eq('kehamilan_id', kehamilanId)
+    if (pilihanRef.current !== kunjunganId) return
+    if (error) {
+      setPesan({ tipe: 'err', teks: 'Gagal memuat skrining TB/malaria: ' + error.message })
+      return
+    }
+    const urut = (data ?? []).sort((a, b) =>
+      (a.kunjungan?.tanggal_periksa ?? '').localeCompare(b.kunjungan?.tanggal_periksa ?? '')
+    )
+    const ini = urut.find((r) => r.kunjungan_id === kunjunganId)
+    setRiwayatTbm(urut.filter((r) => r.kunjungan_id !== kunjunganId))
+    setTbm(ini ? tbmDariRow(ini) : emptyTbm)
+  }
+
+  // Tanda bahaya kehamilan ini: baris kunjungan ini mengisi form, sisanya jadi riwayat.
+  async function muatBahaya(kehamilanId, kunjunganId) {
+    const { data, error } = await supabase
+      .from('tanda_bahaya_anc')
+      .select('*, kunjungan:kunjungan_id(tanggal_periksa)')
+      .eq('kehamilan_id', kehamilanId)
+    if (pilihanRef.current !== kunjunganId) return
+    if (error) {
+      setPesan({ tipe: 'err', teks: 'Gagal memuat tanda bahaya: ' + error.message })
+      return
+    }
+    const urut = (data ?? []).sort((a, b) =>
+      (a.kunjungan?.tanggal_periksa ?? '').localeCompare(b.kunjungan?.tanggal_periksa ?? '')
+    )
+    const ini = urut.find((r) => r.kunjungan_id === kunjunganId)
+    setRiwayatBahaya(urut.filter((r) => r.kunjungan_id !== kunjunganId))
+    setBahaya(ini ? bahayaDariRow(ini) : emptyBahaya)
+  }
+
+  async function muatTindakLanjut(kehamilanId, kunjunganId) {
+    const { data, error } = await supabase
+      .from('tindak_lanjut_skrining')
+      .select('*')
+      .eq('kehamilan_id', kehamilanId)
+      .order('tanggal', { ascending: true })
+    if (kunjunganId && pilihanRef.current !== kunjunganId) return
+    if (error) {
+      setPesan({ tipe: 'err', teks: 'Gagal memuat tindak lanjut: ' + error.message })
+      return
+    }
+    setTindakLanjut(data ?? [])
+  }
+
+  // Dipanggil dari FormANC. Mengembalikan teks galat, atau null kalau berhasil.
+  async function simpanTindakLanjut(data) {
+    if (!kehamilan.id) return 'Simpan kunjungan ini dulu supaya data kehamilan tersimpan'
+    const { error } = await supabase.from('tindak_lanjut_skrining').insert({ kehamilan_id: kehamilan.id, ...data })
+    if (error) return 'Gagal menyimpan tindak lanjut: ' + error.message
+    await muatTindakLanjut(kehamilan.id, terpilih?.id)
+    await muatPenanda()
+    return null
   }
 
   function bukaKartu() {
@@ -367,6 +535,21 @@ export default function DashboardKIA() {
       setPesan({ tipe: 'err', teks: errTD })
       return
     }
+    const errJiwa = isANC ? validasiJiwa(jiwa) : null
+    if (errJiwa) {
+      setPesan({ tipe: 'err', teks: errJiwa })
+      return
+    }
+    const errTbm = isANC ? validasiTbm(tbm, endemisMalaria) : null
+    if (errTbm) {
+      setPesan({ tipe: 'err', teks: errTbm })
+      return
+    }
+    const errBahaya = isANC ? validasiBahaya(bahaya) : null
+    if (errBahaya) {
+      setPesan({ tipe: 'err', teks: errBahaya })
+      return
+    }
     setMenyimpan(true)
 
     try {
@@ -420,6 +603,63 @@ export default function DashboardKIA() {
             { onConflict: 'kunjungan_id' }
           )
         if (errAnc) throw new Error('Data ANC: ' + errAnc.message)
+
+        // skrining jiwa (SRQ-20): satu baris per kunjungan
+        if (jiwa.dilakukan) {
+          const { data: barisJiwa, error: errJiwaSimpan } = await supabase
+            .from('skrining_jiwa_anc')
+            .upsert(
+              { kunjungan_id: terpilih.id, kehamilan_id: kehamilanId, petugas_id: petugas.id, ...siapkanDataJiwa(jiwa) },
+              { onConflict: 'kunjungan_id' }
+            )
+            .select('id')
+            .single()
+          if (errJiwaSimpan) throw new Error('Skrining jiwa: ' + errJiwaSimpan.message)
+          setJiwa((prev) => ({ ...prev, id: barisJiwa.id }))
+        } else if (jiwa.id) {
+          // petugas membatalkan centang pada skrining yang sudah pernah tersimpan
+          const { error: errHapus } = await supabase.from('skrining_jiwa_anc').delete().eq('id', jiwa.id)
+          if (errHapus) throw new Error('Skrining jiwa: ' + errHapus.message)
+          setJiwa((prev) => ({ ...prev, id: null }))
+        }
+
+        // skrining TB (semua) + malaria (wilayah endemis): satu baris per kunjungan
+        if (tbmTerisi(tbm, endemisMalaria)) {
+          const { data: barisTbm, error: errTbmSimpan } = await supabase
+            .from('skrining_tb_malaria_anc')
+            .upsert(
+              { kunjungan_id: terpilih.id, kehamilan_id: kehamilanId, petugas_id: petugas.id, ...siapkanDataTbm(tbm) },
+              { onConflict: 'kunjungan_id' }
+            )
+            .select('id')
+            .single()
+          if (errTbmSimpan) throw new Error('Skrining TB/malaria: ' + errTbmSimpan.message)
+          setTbm((prev) => ({ ...prev, id: barisTbm.id }))
+        } else if (tbm.id) {
+          // semua isian dikosongkan pada data yang sudah pernah tersimpan
+          const { error: errHapusTbm } = await supabase.from('skrining_tb_malaria_anc').delete().eq('id', tbm.id)
+          if (errHapusTbm) throw new Error('Skrining TB/malaria: ' + errHapusTbm.message)
+          setTbm((prev) => ({ ...prev, id: null }))
+        }
+
+        // tanda bahaya kehamilan + edukasi: satu baris per kunjungan
+        if (nilaiBahaya(bahaya).terisi) {
+          const { data: barisBahaya, error: errBahayaSimpan } = await supabase
+            .from('tanda_bahaya_anc')
+            .upsert(
+              { kunjungan_id: terpilih.id, kehamilan_id: kehamilanId, petugas_id: petugas.id, ...siapkanDataBahaya(bahaya) },
+              { onConflict: 'kunjungan_id' }
+            )
+            .select('id')
+            .single()
+          if (errBahayaSimpan) throw new Error('Tanda bahaya: ' + errBahayaSimpan.message)
+          setBahaya((prev) => ({ ...prev, id: barisBahaya.id }))
+        } else if (bahaya.id) {
+          // semua isian dikosongkan pada data yang sudah pernah tersimpan
+          const { error: errHapusBahaya } = await supabase.from('tanda_bahaya_anc').delete().eq('id', bahaya.id)
+          if (errHapusBahaya) throw new Error('Tanda bahaya: ' + errHapusBahaya.message)
+          setBahaya((prev) => ({ ...prev, id: null }))
+        }
       }
 
       // ---- 3. pemeriksaan (sama seperti poli umum) ----
@@ -488,6 +728,8 @@ export default function DashboardKIA() {
       setTimeout(() => {
         setTerpilih(null)
         muatAntrian(true)
+        muatPenanda()
+        muatJiwaPositif()
       }, 1000)
     } catch (err) {
       setPesan({ tipe: 'err', teks: 'Gagal menyimpan: ' + err.message })
@@ -541,6 +783,39 @@ export default function DashboardKIA() {
 
   return (
     <div style={{ background: 'var(--bg, #f9fafb)', minHeight: '100vh', padding: 24 }}>
+      <div style={{ maxWidth: 1400, margin: '0 auto 16px', display: 'flex', gap: 8 }}>
+        {[['antrian', 'Antrian & Pemeriksaan'], ['peta', 'Peta Distribusi'], ['input', 'Input Pasien']].map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setTampilan(id)}
+            style={{
+              padding: '8px 14px',
+              borderRadius: 8,
+              border: '1px solid var(--line, #e5e7eb)',
+              background: tampilan === id ? 'var(--accent, #0f7b64)' : '#fff',
+              color: tampilan === id ? '#fff' : 'var(--ink, #12181b)',
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {tampilan === 'input' ? (
+        <InputPasienPeta instansiId={petugas?.instansi_id ?? null} />
+      ) : tampilan === 'peta' ? (
+        petugas?.instansi_id ? (
+          // TODO: daftar `puskesmas` & `penugasanAwal` (kecamatan milik puskesmas lain) diambil dari Supabase
+          <PetaDistribusi
+            puskesmas={[{ id: petugas.instansi_id, nama: instansiKop?.nama ?? 'Puskesmas Anda' }]}
+            puskesmasId={petugas.instansi_id}
+          />
+        ) : (
+          <div style={{ padding: 24, color: 'var(--muted, #64707a)' }}>Memuat data puskesmas…</div>
+        )
+      ) : (
       <div style={{ maxWidth: 1400, margin: '0 auto' }}>
         {/* header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
@@ -589,6 +864,55 @@ export default function DashboardKIA() {
           <div style={{ display: 'flex', gap: 16 }}>
             {/* antrian */}
             <div style={{ ...kartu, minWidth: 280, flex: 0 }}>
+              {pasienPenanda.length > 0 && (
+                <div
+                  role="alert"
+                  style={{ border: '1px solid var(--danger, #b42318)', background: '#fef3f2', color: 'var(--danger, #b42318)', borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 12 }}
+                >
+                  <div style={{ fontWeight: 700 }}>⚠ Hasil reaktif belum ditindaklanjuti ({pasienPenanda.length})</div>
+                  {pasienPenanda.map((p, i) => (
+                    <div key={i} style={{ marginTop: 4 }}>
+                      {p.nama}
+                      {p.rm ? ` (${p.rm})` : ''} — {p.jenis.join(', ')}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {jiwaPositif.length > 0 && (
+                <div style={{ border: '1px solid var(--danger, #b42318)', background: '#fff', borderRadius: 8, marginBottom: 12, fontSize: 12 }}>
+                  <button
+                    type="button"
+                    onClick={() => setJiwaTerbuka((b) => !b)}
+                    aria-expanded={jiwaTerbuka}
+                    style={{ width: '100%', display: 'flex', justifyContent: 'space-between', padding: 10, border: 'none', background: 'none', cursor: 'pointer', color: 'var(--danger, #b42318)', fontWeight: 700, fontSize: 12, textAlign: 'left' }}
+                  >
+                    <span>
+                      ⚠ Riwayat skrining jiwa positif ({jiwaPositif.length})
+                      {jiwaPositif.some((j) => j.ada_ide_bunuh_diri) ? ` · ${jiwaPositif.filter((j) => j.ada_ide_bunuh_diri).length} ada pikiran mengakhiri hidup` : ''}
+                    </span>
+                    <span>{jiwaTerbuka ? '▲' : '▼'}</span>
+                  </button>
+                  {jiwaTerbuka && (
+                    <div style={{ padding: '0 10px 10px', maxHeight: 260, overflow: 'auto' }}>
+                      {jiwaPositif.map((j) => (
+                        <div key={j.id} style={{ borderTop: '1px solid var(--line, #e5e7eb)', padding: '6px 0' }}>
+                          <div style={{ fontWeight: 600 }}>
+                            {j.kehamilan?.pasien?.nama_lengkap ?? '-'}
+                            {j.kehamilan?.pasien?.no_rekam_medis ? ` (${j.kehamilan.pasien.no_rekam_medis})` : ''}
+                          </div>
+                          <div style={{ color: 'var(--muted, #6b7280)' }}>
+                            {j.kunjungan?.tanggal_periksa ?? '-'} · skor {j.skor}/20 · {j.tindak_lanjut || 'belum ada tindak lanjut'}
+                          </div>
+                          {j.ada_ide_bunuh_diri && (
+                            <div style={{ color: 'var(--danger, #b42318)', fontWeight: 700 }}>Menjawab YA pada pikiran mengakhiri hidup</div>
+                          )}
+                          {j.catatan && <div style={{ color: 'var(--muted, #6b7280)' }}>Catatan: {j.catatan}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               <h2 style={{ fontSize: 14, fontWeight: 700, margin: '0 0 12px' }}>Antrian Hari Ini</h2>
               {antrian.length === 0 ? (
                 <div style={{ fontSize: 13, color: 'var(--muted, #6b7280)', textAlign: 'center', padding: '24px 0' }}>
@@ -606,6 +930,7 @@ export default function DashboardKIA() {
                           padding: 10,
                           fontSize: 12,
                           border: 'none',
+                          borderLeft: penandaPerPasien[k.pasien?.id] ? '4px solid var(--danger, #b42318)' : undefined,
                           borderRadius: 8,
                           background: aktif ? 'var(--accent-light, #dcf5f0)' : '#f3f4f6',
                           color: '#000',
@@ -621,6 +946,11 @@ export default function DashboardKIA() {
                         <div style={{ fontSize: 11, margin: '2px 0 0', color: 'var(--muted, #6b7280)' }}>
                           {k.pasien?.jenis_kelamin ?? '-'} · {k.kategori_pasien ?? '-'}
                         </div>
+                        {penandaPerPasien[k.pasien?.id] && (
+                          <div style={{ fontSize: 11, margin: '4px 0 0', color: 'var(--danger, #b42318)', fontWeight: 700 }}>
+                            ⚠ {penandaPerPasien[k.pasien?.id].join(', ')} reaktif, belum ditindaklanjuti
+                          </div>
+                        )}
                       </button>
                     )
                   })}
@@ -723,11 +1053,16 @@ export default function DashboardKIA() {
                             value={anc}
                             onChange={setAnc}
                             kunjunganLalu={kunjunganLalu}
+                            tindakLanjut={tindakLanjut}
+                            onSimpanTindakLanjut={simpanTindakLanjut}
                             skrining={skrininguntukForm}
                             pasien={pasienLengkap}
                             instansi={instansiKop}
                             paraf={petugas?.nama_lengkap ?? ''}
                           />
+                          <TandaBahaya value={bahaya} onChange={setBahaya} riwayat={riwayatBahaya} disabled={menyimpan} />
+                          <SkriningTBMalaria value={tbm} onChange={setTbm} riwayat={riwayatTbm} endemisMalaria={endemisMalaria} disabled={menyimpan} />
+                          <SkriningJiwa value={jiwa} onChange={setJiwa} riwayat={riwayatJiwa} disabled={menyimpan} />
                           {kehamilan.id && (
                             <button
                               type="button"
@@ -858,6 +1193,7 @@ export default function DashboardKIA() {
           />
         )}
       </div>
+      )}
     </div>
   )
 }

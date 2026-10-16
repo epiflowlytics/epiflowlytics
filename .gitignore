@@ -2,3 +2,15 @@
 dist
 .env
 .env.local
+
+# Bukan kode
+*.cdr
+*.pdf
+*.docx
+*.zip
+~$*
+FILE SHP/
+docs/
+logo*.png
+ARAH MATA ANGIN.svg
+public/data/
